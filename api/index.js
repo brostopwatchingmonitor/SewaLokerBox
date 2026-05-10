@@ -92,3 +92,24 @@ app.post('/api/midtrans-webhook', async (req, res) => {
 });
 app.use(express.json()); 
 app.use(express.urlencoded({ extended: true }));
+
+app.post('/api/midtrans-webhook', async (req, res) => {
+    console.log("--- WEBHOOK RECEIVED ---");
+    try {
+        const notification = req.body;
+        console.log("Body:", JSON.stringify(notification));
+
+        // Verifikasi status ke Midtrans
+        const statusResponse = await snap.transaction.notification(notification);
+        console.log("Midtrans Response:", statusResponse.transaction_status);
+
+        // Respon cepat ke Midtrans agar tidak timeout
+        res.status(200).send('OK');
+    } catch (error) {
+        // Ini akan muncul di Vercel Runtime Logs kamu
+        console.error("DETAILED ERROR:", error.message);
+        console.error("STACK TRACE:", error.stack);
+        
+        res.status(500).send("Internal Error");
+    }
+});
