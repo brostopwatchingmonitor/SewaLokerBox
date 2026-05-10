@@ -46,9 +46,19 @@ app.post('/api/create-payment', async (req, res) => {
             "email": customerEmail
         }
     };
+    // snap.createTransaction(parameter)
+    // .then((transaction)=>{
+    //     // transaction token
+    //     let transactionToken = transaction.token;
+    //     console.log('transactionToken:',transactionToken);
+    // })
 
     try {
         const transaction = await snap.createTransaction(parameter);
+
+        // window.snap.pay('TRANSACTION_TOKEN_HERE');
+
+
         // Simpan orderId ke database Prisma di sini jika perlu (status PENDING)
         res.json({ token: transaction.token, orderId: orderId });
     } catch (error) {
