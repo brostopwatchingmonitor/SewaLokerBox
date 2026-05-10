@@ -4,6 +4,9 @@ const app = express();
 const prisma = new PrismaClient();
 const midtransClient = require('midtrans-client');
 
+// Inisialisasi Prisma agar tidak crash di Vercel
+const prisma = global.prisma || new PrismaClient()
+
 app.use(express.json());
 
 app.get('/', (req, res) => res.send('Smart Locker API Ready!'));
@@ -113,3 +116,8 @@ app.post('/api/midtrans-webhook', async (req, res) => {
         res.status(500).send("Internal Error");
     }
 });
+
+
+if (process.env.NODE_ENV !== 'production') global.prisma = prisma
+
+module.exports = prisma
