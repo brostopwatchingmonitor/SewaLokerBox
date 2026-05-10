@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sewa Loker Smart</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="text/javascript" src="https://app.sandbox.midtrans.com/snap/snap.js" data-client-key="Mid-client-3lC1WTewIIDGmaJx"></script>
+</head>
+<body class="bg-gray-100 min-h-screen p-6">
+    <div class="max-w-md mx-auto bg-white rounded-xl shadow-md overflow-hidden p-6">
+        <h1 class="text-2xl font-bold text-center mb-6">Pesan Loker</h1>
+
+        <div id="step-1">
+            <p class="text-gray-600 mb-4">Pilih Ukuran Loker:</p>
+            <div class="grid grid-cols-2 gap-4 mb-6">
+                <button onclick="selectLocker('Small', 5000)" class="border-2 border-blue-500 p-4 rounded-lg hover:bg-blue-50 text-center">
+                    <span class="block font-bold">Small</span>
+                    <span class="text-sm">Rp 5.000 /jam</span>
+                </button>
+                <button onclick="selectLocker('Large', 10000)" class="border-2 border-blue-500 p-4 rounded-lg hover:bg-blue-50 text-center">
+                    <span class="block font-bold">Large</span>
+                    <span class="text-sm">Rp 10.000 /jam</span>
+                </button>
+            </div>
+        </div>
+
+        <div id="step-2" class="hidden">
+            <p class="mb-2 font-semibold">Detail Pesanan: <span id="summary" class="text-blue-600"></span></p>
+            <input type="text" id="name" placeholder="Nama Lengkap" class="w-full border p-2 mb-3 rounded">
+            <input type="email" id="email" placeholder="Email (untuk struk)" class="w-full border p-2 mb-6 rounded">
+            
+            <button onclick="payNow()" id="pay-button" class="w-full bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 transition">
+                Bayar Sekarang
+            </button>
+        </div>
+    </div>
+
+    <script>
+        let selectedAmount = 0;
+
+        function selectLocker(size, price) {
+            selectedAmount = price;
+            document.getElementById('summary').innerText = `${size} - Rp ${price.toLocaleString()}`;
+            document.getElementById('step-1').classList.add('hidden');
+            document.getElementById('step-2').classList.remove('hidden');
+        }
+
+        async function payNow() {
+            const name = document.getElementById('name').value;
+            const email = document.getElementById('email').value;
+
+            if(!name || !email) return alert("Isi data dulu ya!");
+
+            // 1. Panggil Backend untuk buat transaksi
+            const response = await fetch('/api/create-payment', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ amount: selectedAmount, customerName: name, customerEmail: email })
+            });
+            const data = await response.json();
+
+            // 2. Munculkan Popup Midtrans
+            window.snap.pay(data.token, {
+                onSuccess: function(result) { alert("Pembayaran Berhasil!"); console.log(result); },
+                onPending: function(result) { alert("Menunggu Pembayaran..."); console.log(result); },
+                onError: function(result) { alert("Pembayaran Gagal!"); },
+                onClose: function() { alert('Kamu menutup popup sebelum bayar.'); }
+            });
+        }
+    </script>
+</body>
+</html>

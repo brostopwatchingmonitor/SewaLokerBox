@@ -55,3 +55,38 @@ app.post('/api/create-payment', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
+app.use(express.static('public'));
+
+app.post('/api/midtrans-webhook', async (req, res) => {
+    const notification = req.body;
+
+    try {
+        // 1. Verifikasi transaksi lewat Midtrans client (opsional tapi lebih aman)
+        const statusResponse = await snap.transaction.notification(notification);
+        
+        const orderId = statusResponse.order_id;
+        const transactionStatus = statusResponse.transaction_status;
+        const fraudStatus = statusResponse.fraud_status;
+
+        console.log(`Transaction notification received. Order ID: ${orderId}. Status: ${transactionStatus}`);
+
+        // 2. Logika Update Database berdasarkan status
+        if (transactionStatus == 'settlement') {
+            // PEMBAYARAN BERHASIL! 
+            // Cari data transaksi di DB berdasarkan orderId
+            // Update status menjadi 'SUCCESS'
+            // Jika ini TOP-UP, tambahkan saldo ke User
+            
+            console.log("Pembayaran Settlement (Lunas)");
+            
+        } else if (transactionStatus == 'cancel' || transactionStatus == 'deny' || transactionStatus == 'expire') {
+            // PEMBAYARAN GAGAL
+            console.log("Pembayaran Gagal/Expired");
+        }
+
+        res.status(200).send('OK');
+    } catch (error) {
+        console.error(error);
+        res.status(500).send(error.message);
+    }
+});
