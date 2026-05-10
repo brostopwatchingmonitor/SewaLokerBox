@@ -1,0 +1,78 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Simpan di prisma/schema.prisma
+
+model User {
+  id           String  @id @default(uuid())
+  nfc_uid      String? @unique
+  full_name    String
+  email        String? @unique
+  phone_number String? @unique // Tambahkan ini untuk identitas WA
+  balance      Decimal @default(0) @db.Decimal(10, 2)
+
+  // Relasi balik (Opposite relation fields)
+  usage_logs UsageTransaction[]
+  topup_logs TopUpTransaction[]
+
+  createdAt DateTime @default(now())
+}
+
+model Locker {
+  id        Int     @id
+  size_type String // S, M, L
+  price_h   Decimal @db.Decimal(10, 2)
+  status    String  @default("AVAILABLE")
+
+  // Relasi balik
+  usages UsageTransaction[]
+}
+
+model UsageTransaction {
+  id       String @id @default(uuid())
+  category String // "COURIER_DROP" atau "USER_DEPOSIT"
+
+  // Relasi ke User (Dibuat opsional dengan tanda ?)
+  // Ini adalah field yang tadinya menyebabkan error "missing opposite relation"
+  user_id String?
+  user    User?   @relation(fields: [user_id], references: [id])
+
+  // Data Kurir / Non-User
+  sender_phone    String?
+  courier_name    String?
+  resi_number     String?
+  recipient_phone String // Nomor WA tujuan
+  pickup_code     String  @unique
+
+  // Relasi ke Locker
+  locker_id Int
+  locker    Locker @relation(fields: [locker_id], references: [id])
+
+  started_at    DateTime  @default(now())
+  duration_plan Int?
+  ended_at      DateTime?
+
+  base_fee      Decimal @db.Decimal(10, 2)
+  extension_fee Decimal @default(0) @db.Decimal(10, 2)
+  status        String  @default("WAITING_FOR_PICKUP")
+}
+
+model TopUpTransaction {
+  id             String   @id
+  user_id        String
+  user           User     @relation(fields: [user_id], references: [id])
+  amount         Decimal  @db.Decimal(10, 2)
+  payment_status String   @default("PENDING")
+  createdAt      DateTime @default(now())
+}
