@@ -69,5 +69,47 @@
             });
         }
     </script>
+    <!-- <script type="text/javascript"
+  src="https://app.sandbox.midtrans.com/snap/snap.js"
+  data-client-key="MASUKKAN_CLIENT_KEY_SANDBOX_MU"></script>
+
+<script>
+async function checkout() {
+    const dataProduk = {
+        id: "LKR001",
+        productName: "Sewa Loker Medium",
+        price: 5000,
+        quantity: 1
+    };
+
+    try {
+        // 1. Ambil token dari backend Express kita
+        const response = await fetch('/api/tokenizer', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(dataProduk)
+        });
+        
+        const result = await response.json();
+
+        // 2. Munculkan Popup Snap (Logika window.snap.pay dari video)
+        window.snap.pay(result.token, {
+            onSuccess: function(result) {
+                alert("Pembayaran Berhasil!");
+                console.log(result);
+                // Di sini kamu bisa redirect ke halaman sukses
+            },
+            onPending: function(result) {
+                alert("Menunggu Pembayaran...");
+            },
+            onError: function(result) {
+                alert("Pembayaran Gagal!");
+            }
+        });
+    } catch (err) {
+        console.error("Checkout Error:", err);
+    }
+}
+</script> -->
 </body>
 </html>
