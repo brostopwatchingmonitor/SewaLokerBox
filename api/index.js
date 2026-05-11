@@ -25,7 +25,8 @@ module.exports = app;
 
 let snap = new midtransClient.Snap({
     isProduction : false,
-    serverKey : process.env.MIDTRANS_SERVER_KEY // Ambil dari Dashboard Midtrans Sandbox
+    serverKey : process.env.MIDTRANS_SERVER_KEY, // Ambil dari Dashboard Midtrans Sandbox
+    clientKey: process.env.NEXT_PUBLIC_CLIENT_KEY
 });
 
 // Endpoint untuk membuat transaksi
