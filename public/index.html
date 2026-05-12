@@ -47,39 +47,6 @@
             </div>
     </div>
 
-    <script>
-        let selectedAmount = 0;
-
-        function selectLocker(size, price) {
-            selectedAmount = price;
-            document.getElementById('summary').innerText = `${size} - Rp ${price.toLocaleString()}`;
-            document.getElementById('step-1').classList.add('hidden');
-            document.getElementById('step-2').classList.remove('hidden');
-        }
-
-        async function payNow() {
-            const name = document.getElementById('name').value;
-            const email = document.getElementById('email').value;
-
-            if (!name || !email) return alert("Isi data dulu ya!");
-
-            // 1. Panggil Backend untuk buat transaksi
-            const response = await fetch('/api/create-payment', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({amount: selectedAmount, customerName: name, customerEmail: email})
-            });
-            const data = await response.json();
-
-            // 2. Munculkan Popup Midtrans
-            window.snap.pay(data.token, {
-                onSuccess: function (result) {alert("Pembayaran Berhasil!"); console.log(result);},
-                onPending: function (result) {alert("Menunggu Pembayaran..."); console.log(result);},
-                onError: function (result) {alert("Pembayaran Gagal!");},
-                onClose: function () {alert('Kamu menutup popup sebelum bayar.');}
-            });
-        }
-    </script>
 
     <script>
     async function bayarLoker() {
@@ -113,43 +80,6 @@
     }
     </script>
 
-    <!-- async function checkout() {
-    const dataProduk = {
-    id: "LKR001",
-    productName: "Sewa Loker Medium",
-    price: 5000,
-    quantity: 1
-    };
-
-    try {
-    // 1. Ambil token dari backend Express kita
-    const response = await fetch('/api/tokenizer', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(dataProduk)
-    });
-
-    const result = await response.json();
-
-    // 2. Munculkan Popup Snap (Logika window.snap.pay dari video)
-    window.snap.pay(result.token, {
-    onSuccess: function(result) {
-    alert("Pembayaran Berhasil!");
-    console.log(result);
-    // Di sini kamu bisa redirect ke halaman sukses
-    },
-    onPending: function(result) {
-    alert("Menunggu Pembayaran...");
-    },
-    onError: function(result) {
-    alert("Pembayaran Gagal!");
-    }
-    });
-    } catch (err) {
-    console.error("Checkout Error:", err);
-    }
-    }
-    </script> -->
 </body>
 
 </html>

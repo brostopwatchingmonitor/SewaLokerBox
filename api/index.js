@@ -1,37 +1,30 @@
 const express = require('express');
 const { PrismaClient } = require('@prisma/client');
-const app = express();
-const cors = require('cors');
-const prisma = new PrismaClient();
 const midtransClient = require('midtrans-client');
+const cors = require('cors');
 
-app.use(express.json());
+const app = express();
+const prisma = global.prisma || new PrismaClient();
+if (process.env.NODE_ENV !== 'production') global.prisma = prisma;
+
 app.use(cors());
-app.get('/', (req, res) => res.send('Smart Locker API Ready!'));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static('public'));
 
-// Endpoint untuk Arduino Tapping
-app.post('/api/tap', async (req, res) => {
-  const { nfc_uid } = req.body;
-  try {
-    const user = await prisma.user.findUnique({ where: { nfc_uid } });
-    if (!user) return res.status(404).json({ message: "User not found" });
-
-    res.json({ status: "SUCCESS", user: user.full_name, balance: user.balance });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+// Inisialisasi Midtrans
+const snap = new midtransClient.Snap({
+    isProduction: false,
+    serverKey: process.env.MIDTRANS_SERVER_KEY,
 });
 
-module.exports = app;
+// 1. Endpoint Tokenizer (Untuk memunculkan Popup)
 app.post('/api/tokenizer', async (req, res) => {
     try {
-        // Ambil data dari frontend (sama dengan destructuring di video)
         const { id, productName, price, quantity } = req.body;
-
-        // Susun parameter sesuai standar Midtrans (seperti di menit 16:00 video)
         let parameter = {
             "transaction_details": {
-                "order_id": `LOKER-${id}-${Date.now()}`, // ID Unik
+                "order_id": `LOKER-${id}-${Date.now()}`,
                 "gross_amount": parseInt(price) * parseInt(quantity)
             },
             "item_details": [{
@@ -39,129 +32,52 @@ app.post('/api/tokenizer', async (req, res) => {
                 "price": parseInt(price),
                 "quantity": parseInt(quantity),
                 "name": productName
-            }],
-            "usage_limit": 1 // Opsional: limit penggunaan token
+            }]
         };
 
-        // Minta token ke Midtrans
         const transaction = await snap.createTransaction(parameter);
-        
-        // Kirim token kembali ke frontend
         res.status(200).json({ token: transaction.token });
-
     } catch (error) {
-        console.error("Midtrans Error:", error.message);
+        console.error("Tokenizer Error:", error.message);
         res.status(500).json({ error: error.message });
     }
 });
 
-// Endpoint untuk testing di browser
-app.get('/', (req, res) => res.send("Smart Locker API is Running!"));
-
-module.exports = app;
-
-const snap = new midtransClient.Snap({
-    isProduction: false,
-    serverKey: process.env.MIDTRANS_SERVER_KEY,
-});
-
-// Endpoint untuk membuat transaksi
-app.post('/api/create-payment', async (req, res) => {
-    const { amount, customerName, customerEmail } = req.body;
-    const orderId = `TRX-${Date.now()}`;
-
-    let parameter = {
-        "transaction_details": {
-            "order_id": orderId,
-            "gross_amount": amount
-        },
-        "credit_card": {
-            "secure" : true
-        },
-        "customer_details": {
-            "first_name": customerName,
-            "email": customerEmail
-        }
-    };
-    // snap.createTransaction(parameter)
-    // .then((transaction)=>{
-    //     // transaction token
-    //     let transactionToken = transaction.token;
-    //     console.log('transactionToken:',transactionToken);
-    // })
-
+// 2. Endpoint Webhook (PENTING: Gunakan /api/webhook agar sesuai dashboard Midtrans kamu)
+app.post('/api/webhook', async (req, res) => {
     try {
-        const transaction = await snap.createTransaction(parameter);
-
-        // window.snap.pay('TRANSACTION_TOKEN_HERE');
-
-
-        // Simpan orderId ke database Prisma di sini jika perlu (status PENDING)
-        res.json({ token: transaction.token, orderId: orderId });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-app.use(express.static('public'));
-
-app.post('/api/midtrans-webhook', async (req, res) => {
-    const notification = req.body;
-
-    try {
-        // 1. Verifikasi transaksi lewat Midtrans client (opsional tapi lebih aman)
+        const notification = req.body;
         const statusResponse = await snap.transaction.notification(notification);
         
         const orderId = statusResponse.order_id;
         const transactionStatus = statusResponse.transaction_status;
-        const fraudStatus = statusResponse.fraud_status;
 
-        console.log(`Transaction notification received. Order ID: ${orderId}. Status: ${transactionStatus}`);
+        console.log(`Webhook Received: ${orderId} - ${transactionStatus}`);
 
-        // 2. Logika Update Database berdasarkan status
-        if (transactionStatus == 'settlement') {
-            // PEMBAYARAN BERHASIL! 
-            // Cari data transaksi di DB berdasarkan orderId
-            // Update status menjadi 'SUCCESS'
-            // Jika ini TOP-UP, tambahkan saldo ke User
-            
-            console.log("Pembayaran Settlement (Lunas)");
-            
-        } else if (transactionStatus == 'cancel' || transactionStatus == 'deny' || transactionStatus == 'expire') {
-            // PEMBAYARAN GAGAL
-            console.log("Pembayaran Gagal/Expired");
+        if (transactionStatus === 'settlement') {
+            console.log(`Pembayaran ${orderId} BERHASIL.`);
+            // Tambahkan logika update database Prisma di sini
         }
 
         res.status(200).send('OK');
     } catch (error) {
-        console.error(error);
-        res.status(500).send(error.message);
-    }
-});
-app.use(express.json()); 
-app.use(express.urlencoded({ extended: true }));
-
-app.post('/api/midtrans-webhook', async (req, res) => {
-    console.log("--- WEBHOOK RECEIVED ---");
-    try {
-        const notification = req.body;
-        console.log("Body:", JSON.stringify(notification));
-
-        // Verifikasi status ke Midtrans
-        const statusResponse = await snap.transaction.notification(notification);
-        console.log("Midtrans Response:", statusResponse.transaction_status);
-
-        // Respon cepat ke Midtrans agar tidak timeout
-        res.status(200).send('OK');
-    } catch (error) {
-        // Ini akan muncul di Vercel Runtime Logs kamu
-        console.error("DETAILED ERROR:", error.message);
-        console.error("STACK TRACE:", error.stack);
-        
+        console.error("Webhook Error:", error.message);
         res.status(500).send("Internal Error");
     }
 });
 
+// 3. Endpoint Arduino Tapping
+app.post('/api/tap', async (req, res) => {
+    const { nfc_uid } = req.body;
+    try {
+        const user = await prisma.user.findUnique({ where: { nfc_uid } });
+        if (!user) return res.status(404).json({ message: "User not found" });
+        res.json({ status: "SUCCESS", user: user.full_name, balance: user.balance });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
 
-if (process.env.NODE_ENV !== 'production') global.prisma = prisma
+app.get('/', (req, res) => res.send('Smart Locker API Ready!'));
 
-module.exports = prisma
+module.exports = app;
