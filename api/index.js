@@ -23,42 +23,43 @@ app.post('/api/tap', async (req, res) => {
 });
 
 module.exports = app;
-// app.post('/api/tokenizer', async (req, res) => {
-//     try {
-//         // Ambil data dari frontend (sama dengan destructuring di video)
-//         const { id, productName, price, quantity } = req.body;
+app.post('/api/tokenizer', async (req, res) => {
+    try {
+        // Ambil data dari frontend (sama dengan destructuring di video)
+        const { id, productName, price, quantity } = req.body;
 
-//         // Susun parameter sesuai standar Midtrans (seperti di menit 16:00 video)
-//         let parameter = {
-//             "transaction_details": {
-//                 "order_id": `LOKER-${id}-${Date.now()}`, // ID Unik
-//                 "gross_amount": parseInt(price) * parseInt(quantity)
-//             },
-//             "item_details": [{
-//                 "id": id,
-//                 "price": parseInt(price),
-//                 "quantity": parseInt(quantity),
-//                 "name": productName
-//             }],
-//             "usage_limit": 1 // Opsional: limit penggunaan token
-//         };
+        // Susun parameter sesuai standar Midtrans (seperti di menit 16:00 video)
+        let parameter = {
+            "transaction_details": {
+                "order_id": `LOKER-${id}-${Date.now()}`, // ID Unik
+                "gross_amount": parseInt(price) * parseInt(quantity)
+            },
+            "item_details": [{
+                "id": id,
+                "price": parseInt(price),
+                "quantity": parseInt(quantity),
+                "name": productName
+            }],
+            "usage_limit": 1 // Opsional: limit penggunaan token
+        };
 
-//         // Minta token ke Midtrans
-//         const transaction = await snap.createTransaction(parameter);
+        // Minta token ke Midtrans
+        const transaction = await snap.createTransaction(parameter);
         
-//         // Kirim token kembali ke frontend
-//         res.status(200).json({ token: transaction.token });
+        // Kirim token kembali ke frontend
+        res.status(200).json({ token: transaction.token });
 
-//     } catch (error) {
-//         console.error("Midtrans Error:", error.message);
-//         res.status(500).json({ error: error.message });
-//     }
-// });
+    } catch (error) {
+        console.error("Midtrans Error:", error.message);
+        res.status(500).json({ error: error.message });
+    }
+});
 
-// // Endpoint untuk testing di browser
-// app.get('/', (req, res) => res.send("Smart Locker API is Running!"));
+// Endpoint untuk testing di browser
+app.get('/', (req, res) => res.send("Smart Locker API is Running!"));
 
-// module.exports = app;
+module.exports = app;
+
 const snap = new midtransClient.Snap({
     isProduction: false,
     serverKey: process.env.MIDTRANS_SERVER_KEY,
