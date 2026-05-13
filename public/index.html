@@ -13,47 +13,66 @@
 </head>
 
 <body class="bg-gray-100 min-h-screen p-6">
-    <div class="max-w-md mx-auto bg-white rounded-xl shadow-md overflow-hidden p-6">
+    <div class="max-w-md mx-auto bg-white rounded-xl shadow-md overflow-hidden p-6 mb-6">
         <h1 class="text-2xl font-bold text-center mb-6">Pesan Loker</h1>
 
         <div id="step-1">
             <p class="text-gray-600 mb-4">Pilih Ukuran Loker:</p>
             <div class="grid grid-cols-2 gap-4 mb-6">
-                <button onclick="selectLocker('Small', 5000)"
+                <button onclick="selectLocker('Small', 5000)" id="btn-small"
                     class="border-2 border-blue-500 p-4 rounded-lg hover:bg-blue-50 text-center">
                     <span class="block font-bold">Small</span>
                     <span class="text-sm">Rp 5.000 /jam</span>
                 </button>
-                <button onclick="selectLocker('Large', 10000)"
+                <button onclick="selectLocker('Large', 10000)" id="btn-large"
                     class="border-2 border-blue-500 p-4 rounded-lg hover:bg-blue-50 text-center">
                     <span class="block font-bold">Large</span>
                     <span class="text-sm">Rp 10.000 /jam</span>
                 </button>
             </div>
         </div>
-
-        <body class="bg-gray-100 p-10">
-            <div class="max-w-md mx-auto bg-white rounded-xl shadow-lg p-6">
-                <h2 class="text-xl font-bold mb-4 text-orange-500">PopSafe Detail</h2>
-                <div class="border p-4 rounded-lg mb-4">
-                    <p class="text-gray-600">Pilih Durasi: <span class="font-bold text-red-500">1 Jam / Rp 3.000</span>
-                    </p>
-                </div>
-
-                <button onclick="bayarLoker()" id="pay-button"
-                    class="w-full bg-red-500 text-white font-bold py-3 rounded-lg">
-                    BAYAR SEKARANG
-                </button>
-            </div>
     </div>
 
+    <div class="max-w-md mx-auto bg-white rounded-xl shadow-lg p-6">
+        <h2 class="text-xl font-bold mb-4 text-orange-500">PopSafe Detail</h2>
+        <div class="border p-4 rounded-lg mb-4">
+            <p class="text-gray-600">Pilihan Anda: <span id="selected-detail" class="font-bold text-red-500">Belum dipilih</span></p>
+        </div>
+
+        <button onclick="bayarLoker()" id="pay-button" disabled
+            class="w-full bg-red-500 text-white font-bold py-3 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed">
+            BAYAR SEKARANG
+        </button>
+    </div>
 
     <script>
+    let selectedSize = '';
+    let selectedPrice = 0;
+
+    function selectLocker(size, price) {
+        selectedSize = size;
+        selectedPrice = price;
+        
+        document.getElementById('selected-detail').innerText = `${size} - 1 Jam / Rp ${price.toLocaleString('id-ID')}`;
+        document.getElementById('pay-button').disabled = false;
+        
+        // Highlight selected button
+        document.getElementById('btn-small').classList.remove('bg-blue-100');
+        document.getElementById('btn-large').classList.remove('bg-blue-100');
+        if (size === 'Small') document.getElementById('btn-small').classList.add('bg-blue-100');
+        if (size === 'Large') document.getElementById('btn-large').classList.add('bg-blue-100');
+    }
+
     async function bayarLoker() {
+        if (!selectedSize || !selectedPrice) {
+            alert("Silakan pilih ukuran loker terlebih dahulu.");
+            return;
+        }
+
         const payload = {
-            id: "LK-001",
-            productName: "Sewa Loker Per Jam",
-            price: 3000,
+            id: `LK-${selectedSize.toUpperCase()}`,
+            productName: `Sewa Loker ${selectedSize} Per Jam`,
+            price: selectedPrice,
             quantity: 1
         };
 
@@ -75,11 +94,13 @@
             },
             onError: function(result) { 
                 alert("Gagal bayar!"); 
+            },
+            onClose: function() {
+                console.log("Customer closed the popup without finishing the payment");
             }
         });
     }
     </script>
 
 </body>
-
 </html>

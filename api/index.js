@@ -1,9 +1,9 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
 const midtransClient = require('midtrans-client');
 const cors = require('cors');
-
 const app = express();
+
+const { PrismaClient } = require('@prisma/client');
 const prisma = global.prisma || new PrismaClient();
 if (process.env.NODE_ENV !== 'production') global.prisma = prisma;
 
