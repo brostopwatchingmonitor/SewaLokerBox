@@ -48,14 +48,19 @@ app.post('/api/webhook', async (req, res) => {
     try {
         const notification = req.body;
         const statusResponse = await snap.transaction.notification(notification);
-        
+
         const orderId = statusResponse.order_id;
         const transactionStatus = statusResponse.transaction_status;
 
         console.log(`Webhook Received: ${orderId} - ${transactionStatus}`);
 
         if (transactionStatus === 'settlement') {
-            console.log(`Pembayaran ${orderId} BERHASIL.`);
+            const parts = orderId.split('-'); // "LOKER-{id}-{timestamp}"
+            // Update status order di database
+            await prisma.order.update({
+                where: { order_id: orderId },
+                data: { status: 'paid' }
+            });
             // Tambahkan logika update database Prisma di sini
         }
 
