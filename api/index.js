@@ -1,13 +1,24 @@
+require('dotenv').config();
 const express = require('express');
 const midtransClient = require('midtrans-client');
 const cors = require('cors');
 const app = express();
 
+console.log('MIDTRANS_SERVER_KEY:', process.env.MIDTRANS_SERVER_KEY ? '✓ Loaded' : '✗ Missing');
+
 const { PrismaClient } = require('@prisma/client');
 const prisma = global.prisma || new PrismaClient();
 if (process.env.NODE_ENV !== 'production') global.prisma = prisma;
 
-app.use(cors());
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'OPTIONS']
+}));
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+    next();
+});
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static('public'));

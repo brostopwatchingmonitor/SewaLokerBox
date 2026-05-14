@@ -9,6 +9,18 @@
 
     <script type="text/javascript" src="https://app.sandbox.midtrans.com/snap/snap.js"
         data-client-key="Mid-client-3lC1WTewIIDGmaJx"></script>
+    <script>
+        // Tunggu sampai snap.js selesai load
+        function waitForSnap(callback, retries = 20) {
+            if (window.snap) {
+                callback();
+            } else if (retries > 0) {
+                setTimeout(() => waitForSnap(callback, retries - 1), 250);
+            } else {
+                alert("Gagal memuat Midtrans. Silakan refresh halaman.");
+            }
+        }
+    </script>
 
 </head>
 
@@ -69,6 +81,16 @@
             return;
         }
 
+        // Cek apakah snap.js sudah load
+        if (!window.snap) {
+            alert("Midtrans belum siap. Silakan refresh halaman dan tunggu beberapa detik.");
+            return;
+        }
+
+        const payBtn = document.getElementById('pay-button');
+        payBtn.disabled = true;
+        payBtn.innerText = 'Memproses...';
+
         const payload = {
             id: `LK-${selectedSize.toUpperCase()}`,
             productName: `Sewa Loker ${selectedSize} Per Jam`,
@@ -76,29 +98,49 @@
             quantity: 1
         };
 
-        // 1. Request Token ke API kita
-        const res = await fetch('/api/tokenizer', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        const data = await res.json();
+        try {
+            // 1. Request Token ke API
+            const res = await fetch('/api/tokenizer', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
 
-        // 2. Munculkan Snap Popup
-        window.snap.pay(data.token, {
-            onSuccess: function(result) { 
-                alert("Berhasil! Silakan Tap kartu NFC Anda."); 
-            },
-            onPending: function(result) { 
-                alert("Menunggu pembayaran..."); 
-            },
-            onError: function(result) { 
-                alert("Gagal bayar!"); 
-            },
-            onClose: function() {
-                console.log("Customer closed the popup without finishing the payment");
+            const data = await res.json();
+
+            if (!res.ok) {
+                throw new Error(data.error || 'Gagal mendapatkan token dari server');
             }
-        });
+
+            if (!data.token) {
+                throw new Error('Token tidak valid dari Midtrans');
+            }
+
+            // 2. Munculkan Snap Popup dengan callback yang lebih detail
+            window.snap.pay(data.token, {
+                onSuccess: function(result) {
+                    console.log('Payment success:', result);
+                    alert("Berhasil! Silakan Tap kartu NFC Anda.");
+                },
+                onPending: function(result) {
+                    console.log('Payment pending:', result);
+                    alert("Menunggu pembayaran...");
+                },
+                onError: function(result) {
+                    console.error('Payment error:', result);
+                    alert("Gagal bayar!");
+                },
+                onClose: function() {
+                    console.log("Customer closed the popup");
+                }
+            });
+        } catch (error) {
+            console.error('Error:', error);
+            alert("Error: " + error.message);
+        } finally {
+            payBtn.disabled = false;
+            payBtn.innerText = 'BAYAR SEKARANG';
+        }
     }
     </script>
 
