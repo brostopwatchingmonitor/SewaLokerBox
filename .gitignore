@@ -35,3 +35,5 @@ Thumbs.db
 generated/
 node_modules/
 .env
+
+.claude/
