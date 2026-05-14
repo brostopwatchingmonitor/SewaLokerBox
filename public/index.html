@@ -6,6 +6,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sewa Loker Smart - Pembayaran</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Midtrans Snap.js -->
+    <script src="https://app.sandbox.midtrans.com/snap/snap.js" data-client-key="Mid-client-3lC1WTewIIDGmaJx"></script>
     <style>
         .loader {
             border: 4px solid #f3f3f3;
@@ -45,8 +47,45 @@
             </div>
         </div>
 
+        <!-- Auth Required Section (shown when NOT logged in) -->
+        <div id="auth-required" class="hidden">
+            <div class="bg-white rounded-2xl shadow-xl p-6 mb-6 text-center">
+                <div class="text-5xl mb-4">🔐</div>
+                <h2 class="text-xl font-bold text-gray-800 mb-2">Login Diperlukan</h2>
+                <p class="text-gray-500 mb-6">Anda harus login terlebih dahulu untuk dapat menyewa loker.</p>
+                <a href="login.html" class="inline-block w-full py-3 bg-indigo-600 text-white rounded-lg font-semibold hover:bg-indigo-700 transition">
+                    Masuk
+                </a>
+                <p class="text-center text-sm text-gray-600 mt-4">
+                    Belum punya akun? <a href="signup.html" class="text-indigo-600 font-medium hover:underline">Daftar</a>
+                </p>
+            </div>
+        </div>
+
+        <!-- User Info Section (shown when logged in) -->
+        <div id="auth-section" class="hidden">
+            <div class="bg-white rounded-2xl shadow-xl p-6 mb-6 fade-in">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center">
+                        <div class="w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center">
+                            <span class="text-xl">👤</span>
+                        </div>
+                        <div class="ml-3">
+                            <h3 class="font-bold text-gray-800" id="display-user-name">-</h3>
+                            <p class="text-sm text-gray-500" id="display-user-email">-</p>
+                        </div>
+                    </div>
+                    <button onclick="logout()" class="text-gray-400 hover:text-red-500 transition">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M3 3a1 1 0 00-1 1v12a1 1 0 001 1h12a1 1 0 001-1V4a1 1 0 00-1-1H3zm11 4.414l-4.293 4.293a1 1 0 01-1.414 0L4 7.414 5.586 6l3.293 3.293a1 1 0 001.414 0L14 6.586 15 7.414z" clip-rule="evenodd" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+
         <!-- Step 1: Select Locker Size -->
-        <div id="step-select" class="bg-white rounded-2xl shadow-xl p-6 mb-6 fade-in">
+        <div id="step-select" class="bg-white rounded-2xl shadow-xl p-6 mb-6 fade-in hidden">
             <div class="flex items-center mb-4">
                 <div class="w-8 h-8 bg-indigo-600 rounded-full flex items-center justify-center text-white font-bold">1</div>
                 <h2 class="ml-3 text-xl font-semibold text-gray-800">Pilih Ukuran Loker</h2>
@@ -79,27 +118,27 @@
             </div>
 
             <div class="grid grid-cols-3 gap-3">
-                <button onclick="selectDuration(1)" class="duration-btn border-2 border-gray-200 py-3 rounded-lg hover:border-indigo-500 transition-all">
+                <button onclick="selectDuration(1, this)" class="duration-btn border-2 border-gray-200 py-3 rounded-lg hover:border-indigo-500 transition-all">
                     <span class="block font-bold">1 Jam</span>
                     <span class="text-xs text-gray-500" id="price-1">-</span>
                 </button>
-                <button onclick="selectDuration(2)" class="duration-btn border-2 border-gray-200 py-3 rounded-lg hover:border-indigo-500 transition-all">
+                <button onclick="selectDuration(2, this)" class="duration-btn border-2 border-gray-200 py-3 rounded-lg hover:border-indigo-500 transition-all">
                     <span class="block font-bold">2 Jam</span>
                     <span class="text-xs text-gray-500" id="price-2">-</span>
                 </button>
-                <button onclick="selectDuration(3)" class="duration-btn border-2 border-gray-200 py-3 rounded-lg hover:border-indigo-500 transition-all">
+                <button onclick="selectDuration(3, this)" class="duration-btn border-2 border-gray-200 py-3 rounded-lg hover:border-indigo-500 transition-all">
                     <span class="block font-bold">3 Jam</span>
                     <span class="text-xs text-gray-500" id="price-3">-</span>
                 </button>
-                <button onclick="selectDuration(4)" class="duration-btn border-2 border-gray-200 py-3 rounded-lg hover:border-indigo-500 transition-all">
+                <button onclick="selectDuration(4, this)" class="duration-btn border-2 border-gray-200 py-3 rounded-lg hover:border-indigo-500 transition-all">
                     <span class="block font-bold">4 Jam</span>
                     <span class="text-xs text-gray-500" id="price-4">-</span>
                 </button>
-                <button onclick="selectDuration(6)" class="duration-btn border-2 border-gray-200 py-3 rounded-lg hover:border-indigo-500 transition-all">
+                <button onclick="selectDuration(6, this)" class="duration-btn border-2 border-gray-200 py-3 rounded-lg hover:border-indigo-500 transition-all">
                     <span class="block font-bold">6 Jam</span>
                     <span class="text-xs text-gray-500" id="price-6">-</span>
                 </button>
-                <button onclick="selectDuration(12)" class="duration-btn border-2 border-gray-200 py-3 rounded-lg hover:border-indigo-500 transition-all">
+                <button onclick="selectDuration(12, this)" class="duration-btn border-2 border-gray-200 py-3 rounded-lg hover:border-indigo-500 transition-all">
                     <span class="block font-bold">12 Jam</span>
                     <span class="text-xs text-gray-500" id="price-12">-</span>
                 </button>
@@ -115,40 +154,49 @@
                 <button onclick="goBack()" class="flex-1 py-3 border-2 border-gray-300 rounded-lg font-semibold text-gray-600 hover:bg-gray-50 transition">
                     ← Kembali
                 </button>
-                <button onclick="goToPayment()" id="btn-next" class="flex-1 py-3 bg-indigo-600 text-white rounded-lg font-semibold hover:bg-indigo-700 transition disabled:opacity-50 disabled:cursor-not-allowed">
+                <button onclick="goToPayment()" id="btn-next" class="flex-1 py-3 bg-indigo-600 text-white rounded-lg font-semibold hover:bg-indigo-700 transition disabled:opacity-50 disabled:cursor-not-allowed" disabled>
                     Lanjut →
                 </button>
             </div>
         </div>
 
-        <!-- Step 3: Customer Info -->
+        <!-- Step 3: Konfirmasi Pembayaran -->
         <div id="step-customer" class="bg-white rounded-2xl shadow-xl p-6 mb-6 fade-in hidden">
             <div class="flex items-center mb-4">
                 <div class="w-8 h-8 bg-indigo-600 rounded-full flex items-center justify-center text-white font-bold">3</div>
-                <h2 class="ml-3 text-xl font-semibold text-gray-800">Data Pelanggan</h2>
+                <h2 class="ml-3 text-xl font-semibold text-gray-800">Konfirmasi Pembayaran</h2>
             </div>
 
-            <div class="space-y-4">
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">Nama Lengkap</label>
-                    <input type="text" id="customer-name" placeholder="Masukkan nama Anda"
-                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none">
-                </div>
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">Email</label>
-                    <input type="email" id="customer-email" placeholder="email@contoh.com"
-                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none">
-                </div>
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">No. Telepon</label>
-                    <input type="tel" id="customer-phone" placeholder="081234567890"
-                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none">
+            <div class="p-4 bg-indigo-50 rounded-lg mb-4">
+                <h3 class="font-semibold text-gray-800 mb-3">Ringkasan Pesanan:</h3>
+                <div class="space-y-2 text-sm">
+                    <div class="flex justify-between">
+                        <span class="text-gray-600">Ukuran Loker:</span>
+                        <span class="font-medium" id="summary-locker">-</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-600">Durasi:</span>
+                        <span class="font-medium" id="summary-duration">-</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-600">Harga/Jam:</span>
+                        <span class="font-medium" id="summary-price">-</span>
+                    </div>
+                    <hr class="my-2">
+                    <div class="flex justify-between text-lg">
+                        <span class="font-semibold text-gray-800">Total Bayar:</span>
+                        <span class="font-bold text-indigo-600" id="summary-total">-</span>
+                    </div>
                 </div>
             </div>
 
-            <div class="mt-4 p-4 bg-indigo-50 rounded-lg">
-                <p class="text-sm font-semibold text-indigo-800">Ringkasan:</p>
-                <p class="text-sm text-indigo-600" id="summary-text">-</p>
+            <div class="p-4 bg-gray-50 rounded-lg mb-4">
+                <h3 class="font-semibold text-gray-800 mb-2">Data Pemesan:</h3>
+                <div class="text-sm space-y-1">
+                    <p><span class="text-gray-600">Nama:</span> <span id="summary-name">-</span></p>
+                    <p><span class="text-gray-600">Email:</span> <span id="summary-email">-</span></p>
+                    <p><span class="text-gray-600">Telepon:</span> <span id="summary-phone">-</span></p>
+                </div>
             </div>
 
             <div class="flex gap-3 mt-6">
@@ -197,47 +245,157 @@
             <button onclick="hideError()" class="mt-3 text-sm text-red-600 hover:underline">Tutup</button>
         </div>
 
-        <!-- Footer -->
-        <div class="text-center text-gray-400 text-sm mt-8">
-            <p>Powered by Midtrans | Smart Locker System</p>
+        <!-- Success Display -->
+        <div id="success-display" class="hidden bg-green-50 border border-green-200 rounded-xl p-4 mb-6">
+            <div class="flex items-center">
+                <span class="text-2xl mr-3">✅</span>
+                <div>
+                    <p class="font-semibold text-green-700">Berhasil</p>
+                    <p id="success-message" class="text-green-600 text-sm mt-1">-</p>
+                </div>
+            </div>
+            <button onclick="hideSuccess()" class="mt-3 text-sm text-green-600 hover:underline">Tutup</button>
         </div>
-    </div>
 
-    <!-- Midtrans Snap.js -->
-    <script type="text/javascript" src="https://app.sandbox.midtrans.com/snap/snap.js"
-        data-client-key="Mid-client-3lC1WTewIIDGmaJx"></script>
+    </div>
 
     <script>
         // =============================================
         // STATE MANAGEMENT
         // =============================================
         let state = {
+            // Auth state
+            isLoggedIn: false,
+            token: localStorage.getItem('token') || null,
+            user: JSON.parse(localStorage.getItem('user') || 'null'),
+
+            // Rental state
             lockerSize: null,
             lockerPrice: 0,
             duration: 0,
             totalPrice: 0,
-            customer: {
-                name: '',
-                email: '',
-                phone: ''
-            },
             orderId: null,
             snapToken: null
         };
 
         // =============================================
+        // AUTH FUNCTIONS
+        // =============================================
+
+        function showAuthRequired() {
+            document.getElementById('auth-required').classList.remove('hidden');
+            document.getElementById('auth-section').classList.add('hidden');
+            document.getElementById('step-select').classList.add('hidden');
+        }
+
+        function showAuthenticatedUI() {
+            document.getElementById('auth-required').classList.add('hidden');
+            document.getElementById('auth-section').classList.remove('hidden');
+            document.getElementById('step-select').classList.remove('hidden');
+
+            // Update user info
+            document.getElementById('display-user-name').textContent = state.user.fullName || state.user.full_name || '-';
+            document.getElementById('display-user-email').textContent = state.user.email || '-';
+        }
+
+        function showLoading(text = 'Memuat...') {
+            document.getElementById('loading-text').textContent = text;
+            document.getElementById('loading-overlay').classList.remove('hidden');
+        }
+
+        function hideLoading() {
+            document.getElementById('loading-overlay').classList.add('hidden');
+        }
+
+        function showError(message) {
+            document.getElementById('error-message').textContent = message;
+            document.getElementById('error-display').classList.remove('hidden');
+        }
+
+        function hideError() {
+            document.getElementById('error-display').classList.add('hidden');
+        }
+
+        function showSuccess(message) {
+            document.getElementById('success-message').textContent = message;
+            document.getElementById('success-display').classList.remove('hidden');
+        }
+
+        function hideSuccess() {
+            document.getElementById('success-display').classList.add('hidden');
+        }
+
+        function logout() {
+            state.token = null;
+            state.user = null;
+            state.isLoggedIn = false;
+
+            localStorage.removeItem('token');
+            localStorage.removeItem('user');
+
+            // Reset to beginning
+            resetPayment();
+            showAuthRequired();
+        }
+
+        async function validateToken() {
+            if (!state.token) {
+                return false;
+            }
+
+            try {
+                const response = await fetch('/api/auth/me', {
+                    headers: { 'Authorization': 'Bearer ' + state.token }
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    if (result.success) {
+                        state.user = result.user;
+                        state.isLoggedIn = true;
+                        return true;
+                    }
+                }
+
+                // Token invalid or expired
+                logout();
+                return false;
+            } catch (error) {
+                console.error('Token validation error:', error);
+                return false;
+            }
+        }
+
+        // =============================================
         // INITIALIZATION
         // =============================================
-        document.addEventListener('DOMContentLoaded', () => {
-            console.log('Smart Locker Payment System Initialized');
+        document.addEventListener('DOMContentLoaded', async () => {
+            console.log('Smart Locker App Initialized');
+
+            // Show loading while validating
+            showLoading('Memuat...');
+
+            // Validate token
+            const isValid = await validateToken();
+
+            if (isValid) {
+                showAuthenticatedUI();
+            } else {
+                showAuthRequired();
+            }
+
+            hideLoading();
 
             // Check if Midtrans Snap is loaded
-            if (typeof window.snap === 'undefined') {
-                console.error('Midtrans Snap.js not loaded!');
-                showError('Gagal memuat Midtrans. Silakan refresh halaman.');
-            } else {
-                console.log('✓ Midtrans Snap.js loaded successfully');
-            }
+            // Wait a moment for script to load
+            setTimeout(() => {
+                if (typeof window.snap === 'undefined') {
+                    console.error('Midtrans Snap.js not loaded!');
+                    showError('Gagal memuat Midtrans. Silakan refresh halaman.');
+                } else {
+                    console.log('✓ Midtrans Snap.js loaded successfully');
+                }
+            }, 500);
 
             // Check for transaction result from URL
             checkUrlParams();
@@ -247,7 +405,7 @@
             const params = new URLSearchParams(window.location.search);
             const status = params.get('status');
             if (status === 'success') {
-                showSuccess('Pembayaran berhasil!');
+                showSuccess('Pembayaran berhasil! Silakan tap NFC.');
             } else if (status === 'error') {
                 showError('Pembayaran gagal.');
             }
@@ -264,10 +422,16 @@
         }
 
         function selectLocker(size, price) {
+            // Must be logged in
+            if (!state.isLoggedIn) {
+                showAuthRequired();
+                return;
+            }
+
             state.lockerSize = size;
             state.lockerPrice = price;
-            state.duration = 1; // Default
-            state.totalPrice = price;
+            state.duration = 0; // Reset - user must select
+            state.totalPrice = 0;
 
             // Update prices display
             [1, 2, 3, 4, 6, 12].forEach(d => {
@@ -283,28 +447,33 @@
 
             // Update summary
             document.getElementById('selected-locker').textContent = `${size} - Rp ${price.toLocaleString('id-ID')}/jam`;
-            document.getElementById('selected-duration').textContent = '1 Jam';
-            updateTotalPrice();
+            document.getElementById('selected-duration').textContent = '-';
+            document.getElementById('total-price').textContent = 'Rp 0';
 
-            // Enable next button
-            document.getElementById('btn-next').disabled = false;
-
-            // Go to next step
-            showStep('step-duration');
-        }
-
-        function selectDuration(duration) {
-            state.duration = duration;
-            state.totalPrice = state.lockerPrice * duration;
-
-            // Highlight selected
+            // Reset duration buttons
             document.querySelectorAll('.duration-btn').forEach(btn => {
                 btn.classList.remove('border-indigo-500', 'bg-indigo-50');
             });
-            event.currentTarget.classList.add('border-indigo-500', 'bg-indigo-50');
+
+            // Go to duration selection step
+            showStep('step-duration');
+        }
+
+        function selectDuration(duration, btnElement) {
+            state.duration = duration;
+            state.totalPrice = state.lockerPrice * duration;
+
+            // Update UI
+            document.querySelectorAll('.duration-btn').forEach(btn => {
+                btn.classList.remove('border-indigo-500', 'bg-indigo-50');
+            });
+            btnElement.classList.add('border-indigo-500', 'bg-indigo-50');
 
             document.getElementById('selected-duration').textContent = `${duration} Jam`;
             updateTotalPrice();
+
+            // Enable the next button
+            document.getElementById('btn-next').disabled = false;
         }
 
         function updateTotalPrice() {
@@ -312,10 +481,25 @@
         }
 
         function goBack() {
-            if (state.duration > 0) {
-                showStep('step-duration');
-            } else {
-                showStep('step-select');
+            const currentStep = document.querySelector('#step-select:not(.hidden), #step-duration:not(.hidden), #step-customer:not(.hidden), #step-confirm:not(.hidden)');
+
+            if (currentStep) {
+                if (currentStep.id === 'step-customer') {
+                    showStep('step-select');
+                } else if (currentStep.id === 'step-duration') {
+                    // Reset duration selection
+                    state.duration = 0;
+                    state.totalPrice = state.lockerPrice;
+                    updateTotalPrice();
+                    document.querySelectorAll('.duration-btn').forEach(btn => {
+                        btn.classList.remove('border-indigo-500', 'bg-indigo-50');
+                    });
+                    document.getElementById('selected-duration').textContent = '-';
+                    showStep('step-select');
+                } else if (currentStep.id === 'step-confirm') {
+                    // Go back to select locker
+                    resetPayment();
+                }
             }
         }
 
@@ -325,11 +509,15 @@
                 return;
             }
 
-            // Update summary
-            document.getElementById('summary-text').innerHTML = `
-                <strong>${state.lockerSize}</strong> × <strong>${state.duration} Jam</strong><br>
-                Total: <strong>Rp ${state.totalPrice.toLocaleString('id-ID')}</strong>
-            `;
+            // Update summary from user data
+            document.getElementById('summary-locker').textContent = state.lockerSize;
+            document.getElementById('summary-duration').textContent = `${state.duration} Jam`;
+            document.getElementById('summary-price').textContent = `Rp ${state.lockerPrice.toLocaleString('id-ID')}`;
+            document.getElementById('summary-total').textContent = `Rp ${state.totalPrice.toLocaleString('id-ID')}`;
+
+            document.getElementById('summary-name').textContent = state.user.fullName || state.user.full_name || '-';
+            document.getElementById('summary-email').textContent = state.user.email || '-';
+            document.getElementById('summary-phone').textContent = state.user.phoneNumber || state.user.phone_number || '-';
 
             showStep('step-customer');
         }
@@ -338,56 +526,49 @@
         // PAYMENT PROCESS
         // =============================================
         async function proceedToPayment() {
-            // Validate customer data
-            state.customer.name = document.getElementById('customer-name').value.trim();
-            state.customer.email = document.getElementById('customer-email').value.trim();
-            state.customer.phone = document.getElementById('customer-phone').value.trim();
-
-            if (!state.customer.name) {
-                showError('Nama wajib diisi.');
+            // Must be logged in with valid user data
+            if (!state.isLoggedIn || !state.user) {
+                showError('Silakan login terlebih dahulu.');
                 return;
             }
 
-            if (!state.customer.email) {
-                showError('Email wajib diisi.');
-                return;
-            }
+            const customerName = state.user.fullName || state.user.full_name;
+            const customerEmail = state.user.email;
+            const customerPhone = state.user.phoneNumber || state.user.phone_number;
 
-            if (!state.customer.phone) {
-                showError('No. Telepon wajib diisi.');
+            if (!customerName || !customerEmail || !customerPhone) {
+                showError('Data profil tidak lengkap. Silakan update profile Anda.');
                 return;
             }
 
             // Check if Snap.js is loaded
             if (typeof window.snap === 'undefined') {
-                showError('Midtrans belum siap. Silakan refresh halaman dan tunggu beberapa detik.');
+                showError('Midtrans belum siap. Silakan tunggu beberapa detik dan coba lagi.');
                 return;
             }
 
-            // Show loading
             showLoading('Menghubungi Midtrans...');
 
             try {
-                // 1. Create order ID
-                const orderId = `LOKER-${state.lockerSize.toUpperCase()}-${Date.now()}`;
-
-                // 2. Request Snap Token dari backend
+                // Request Snap Token dari backend
                 console.log('Requesting Snap Token...');
-                console.log('Order ID:', orderId);
 
-                const response = await fetch('/api/get-snap-token', {
+                const headers = { 'Content-Type': 'application/json' };
+                if (state.token) {
+                    headers['Authorization'] = 'Bearer ' + state.token;
+                }
+
+                const response = await fetch('/api/create-order', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
+                    headers: headers,
                     body: JSON.stringify({
-                        orderId: orderId,
                         lockerSize: state.lockerSize,
                         duration: state.duration,
                         price: state.lockerPrice,
-                        customerName: state.customer.name,
-                        customerEmail: state.customer.email,
-                        customerPhone: state.customer.phone
+                        customerName: customerName,
+                        customerEmail: customerEmail,
+                        customerPhone: customerPhone,
+                        userId: state.user.id
                     })
                 });
 
@@ -400,12 +581,13 @@
                 }
 
                 console.log('✓ Snap Token received:', result.token);
+                console.log('✓ Order ID:', result.orderId);
 
-                // 3. Store state
-                state.orderId = orderId;
+                // Store state
+                state.orderId = result.orderId;
                 state.snapToken = result.token;
 
-                // 4. Open Midtrans Snap Popup
+                // Open Midtrans Snap Popup
                 console.log('Opening Midtrans Snap Popup...');
 
                 window.snap.pay(result.token, {
@@ -423,7 +605,6 @@
                     },
                     onClose: function() {
                         console.log('Snap popup closed');
-                        // Optionally handle popup close
                     }
                 });
 
@@ -440,7 +621,8 @@
         function handlePaymentSuccess(result) {
             console.log('Handling payment success...', result);
 
-            document.getElementById('order-id-display').textContent = state.orderId || result.order_id;
+            const orderId = state.orderId || result.order_id;
+            document.getElementById('order-id-display').textContent = orderId;
 
             // Change NFC status to waiting
             const nfcStatus = document.getElementById('nfc-status');
@@ -455,26 +637,30 @@
 
             showStep('step-confirm');
 
-            // Simulasi: setelah 3 detik, konfirmasi NFC (demo only)
-            setTimeout(() => {
-                const nfcResult = document.getElementById('nfc-status');
-                nfcResult.innerHTML = `
-                    <div class="text-center">
-                        <div class="text-4xl mb-2">✅</div>
-                        <p class="text-green-600 font-medium">Kartu Terdeteksi!</p>
-                        <p class="text-sm text-gray-600">Loker berhasil dibuka</p>
-                    </div>
-                `;
-                nfcResult.classList.remove('border-indigo-300', 'bg-indigo-50');
-                nfcResult.classList.add('border-green-300', 'bg-green-50');
-            }, 3000);
+            // Fetch pickup code from backend
+            fetchPickupCode(orderId);
+        }
+
+        async function fetchPickupCode(orderId) {
+            try {
+                const response = await fetch(`/api/pickup/${orderId}`);
+                const data = await response.json();
+
+                if (data.success && data.pickup_code) {
+                    document.getElementById('nfc-status').innerHTML += `
+                        <p class="text-xs text-gray-400 mt-2">Kode Ambil: ${data.pickup_code}</p>
+                    `;
+                }
+            } catch (error) {
+                console.log('Could not fetch pickup code:', error);
+            }
         }
 
         function handlePaymentPending(result) {
             console.log('Payment pending:', result);
             showError(`
                 <strong>Pembayaran Tertunda</strong><br>
-                Silakan selesaikan pembayaran, kemudian tap kartu NFC.<br>
+                Silakan selesaikan pembayaran.<br>
                 <span class="text-xs">Order ID: ${result.order_id || state.orderId}</span>
             `);
         }
@@ -486,60 +672,23 @@
 
         function resetPayment() {
             // Reset state
-            state = {
-                lockerSize: null,
-                lockerPrice: 0,
-                duration: 0,
-                totalPrice: 0,
-                customer: { name: '', email: '', phone: '' },
-                orderId: null,
-                snapToken: null
-            };
+            state.lockerSize = null;
+            state.lockerPrice = 0;
+            state.duration = 0;
+            state.totalPrice = 0;
+            state.orderId = null;
+            state.snapToken = null;
 
-            // Clear form
-            document.getElementById('customer-name').value = '';
-            document.getElementById('customer-email').value = '';
-            document.getElementById('customer-phone').value = '';
-
-            // Clear selection highlights
+            // Reset UI
             document.querySelectorAll('.locker-btn, .duration-btn').forEach(btn => {
                 btn.classList.remove('border-indigo-500', 'bg-indigo-50');
             });
 
-            // Reset NFC status
-            const nfcStatus = document.getElementById('nfc-status');
-            nfcStatus.innerHTML = '<p class="text-gray-500">⏳ Menunggu tap kartu NFC...</p>';
-            nfcStatus.classList.remove('border-indigo-300', 'bg-indigo-50', 'border-green-300', 'bg-green-50');
+            document.getElementById('selected-locker').textContent = '-';
+            document.getElementById('selected-duration').textContent = '-';
+            document.getElementById('total-price').textContent = 'Rp 0';
 
-            // Go to first step
             showStep('step-select');
-        }
-
-        // =============================================
-        // UI HELPERS
-        // =============================================
-        function showLoading(text = 'Memuat...') {
-            document.getElementById('loading-text').textContent = text;
-            document.getElementById('loading-overlay').classList.remove('hidden');
-        }
-
-        function hideLoading() {
-            document.getElementById('loading-overlay').classList.add('hidden');
-        }
-
-        function showError(message) {
-            const errorDiv = document.getElementById('error-display');
-            document.getElementById('error-message').innerHTML = message;
-            errorDiv.classList.remove('hidden');
-            errorDiv.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
-
-        function hideError() {
-            document.getElementById('error-display').classList.add('hidden');
-        }
-
-        function showSuccess(message) {
-            alert(message);
         }
     </script>
 </body>

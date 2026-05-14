@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Masuk - Smart Locker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .loader {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #e74c3c;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen p-6">
+    <div class="max-w-md mx-auto">
+        <!-- Header -->
+        <div class="text-center mb-8">
+            <h1 class="text-3xl font-bold text-indigo-700">🏧 Smart Locker</h1>
+            <p class="text-gray-500 mt-2">Sistem Pembayaran Loker Otomatis</p>
+        </div>
+
+        <!-- Loading Indicator -->
+        <div id="loading-overlay" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div class="bg-white p-8 rounded-xl shadow-lg text-center">
+                <div class="loader mx-auto mb-4"></div>
+                <p id="loading-text" class="text-gray-700 font-medium">Memuat...</p>
+            </div>
+        </div>
+
+        <!-- Error Display -->
+        <div id="error-display" class="hidden bg-red-50 border border-red-200 rounded-xl p-4 mb-4">
+            <p id="error-message" class="text-red-600 text-sm">-</p>
+            <button onclick="hideError()" class="mt-2 text-sm text-red-600 hover:underline">Tutup</button>
+        </div>
+
+        <!-- Login Card -->
+        <div id="login-card" class="bg-white rounded-2xl shadow-xl p-6">
+            <div class="text-center mb-6">
+                <h2 class="text-2xl font-bold text-gray-800">Masuk</h2>
+                <p class="text-gray-500 text-sm mt-1">Masuk untuk melanjutkan sewa loker</p>
+            </div>
+
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                    <input type="email" id="login-email" placeholder="email@contoh.com" required
+                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                    <input type="password" id="login-password" placeholder="Masukkan password" required
+                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none">
+                </div>
+                <button id="btn-login" onclick="login()" class="w-full py-3 bg-indigo-600 text-white rounded-lg font-semibold hover:bg-indigo-700 transition">
+                    Masuk
+                </button>
+                <p class="text-center text-sm text-gray-600">
+                    Belum punya akun? <a href="signup.html" class="text-indigo-600 font-medium hover:underline">Daftar di sini</a>
+                </p>
+            </div>
+        </div>
+
+        <div class="mt-6 text-center">
+            <a href="index.html" class="text-sm text-gray-500 hover:text-indigo-600">
+                ← Kembali ke beranda
+            </a>
+        </div>
+    </div>
+
+    <script>
+        // =============================================
+        // AUTHENTICATION
+        // =============================================
+
+        // Check if already logged in - redirect to index
+        const token = localStorage.getItem('token');
+        const user = localStorage.getItem('user');
+
+        if (token && user) {
+            // Validate token with server
+            validateAndRedirect();
+        }
+
+        async function validateAndRedirect() {
+            try {
+                const response = await fetch('/api/auth/me', {
+                    headers: { 'Authorization': 'Bearer ' + token }
+                });
+
+                if (response.ok) {
+                    // Token valid - redirect to main app
+                    window.location.href = 'index.html';
+                } else {
+                    // Token invalid - clear and stay on login
+                    localStorage.removeItem('token');
+                    localStorage.removeItem('user');
+                }
+            } catch (error) {
+                console.error('Validation error:', error);
+                // Stay on login page if server error
+            }
+        }
+
+        function showLoading(text = 'Memuat...') {
+            document.getElementById('loading-text').textContent = text;
+            document.getElementById('loading-overlay').classList.remove('hidden');
+            document.getElementById('btn-login').disabled = true;
+        }
+
+        function hideLoading() {
+            document.getElementById('loading-overlay').classList.add('hidden');
+            document.getElementById('btn-login').disabled = false;
+        }
+
+        function showError(message) {
+            document.getElementById('error-message').textContent = message;
+            document.getElementById('error-display').classList.remove('hidden');
+        }
+
+        function hideError() {
+            document.getElementById('error-display').classList.add('hidden');
+        }
+
+        async function login() {
+            const email = document.getElementById('login-email').value.trim();
+            const password = document.getElementById('login-password').value;
+
+            if (!email || !password) {
+                showError('Email dan password wajib diisi!');
+                return;
+            }
+
+            showLoading('Memuat...');
+
+            try {
+                const response = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    // Save auth data
+                    localStorage.setItem('token', result.token);
+                    localStorage.setItem('user', JSON.stringify(result.user));
+
+                    showLoading('Login berhasil! Mengalihkan...');
+
+                    // Redirect to main app
+                    setTimeout(() => {
+                        window.location.href = 'index.html';
+                    }, 500);
+                } else {
+                    hideLoading();
+                    showError(result.error || 'Email atau password salah');
+                }
+            } catch (error) {
+                hideLoading();
+                showError('Terjadi kesalahan. Silakan coba lagi.');
+            }
+        }
+
+        // Enter key support
+        document.getElementById('login-password').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') login();
+        });
+    </script>
+</body>
+</html>
