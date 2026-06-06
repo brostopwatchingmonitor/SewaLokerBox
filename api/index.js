@@ -29,7 +29,7 @@ pool.query('SELECT NOW()')
 // =============================================
 const MIDTRANS_IS_PRODUCTION = false;
 const MIDTRANS_SERVER_KEY = process.env.MIDTRANS_SERVER_KEY;
-const MIDTRANS_CLIENT_KEY = process.env.MIDTRANS_CLIENT_KEY || 'Mid-client-3lC1WTewIIDGmaJx';
+const MIDTRANS_CLIENT_KEY = process.env.MIDTRANS_CLIENT_KEY;
 
 console.log('===========================================');
 console.log('MIDTRANS CONFIGURATION');
@@ -365,6 +365,7 @@ async function getAllOrders(limit = 50) {
 }
 
 // --- UsageTransaction Functions ---
+// --- UsageTransaction Functions ---
 async function createUsageTransaction(usageData) {
     const {
         userId,
@@ -381,13 +382,14 @@ async function createUsageTransaction(usageData) {
     // Get order details
     const order = await getOrderById(orderId);
 
+    // FIX: Menghilangkan duplikasi started_at dan merapikan urutan kolom sesuai skema Prisma
     const result = await pool.query(`
         INSERT INTO "UsageTransaction" (
             id, category, user_id, recipient_phone, pickup_code,
-            locker_id, started_at, duration_plan, base_fee,
-            status, "started_at", "ended_at"
+            locker_id, duration_plan, base_fee, status, 
+            started_at, ended_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, $8, 'ACTIVE', NOW(), NULL)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'ACTIVE', NOW(), NULL)
         RETURNING *
     `, [
         id,
