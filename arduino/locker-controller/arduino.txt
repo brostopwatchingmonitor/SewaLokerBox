@@ -1,0 +1,313 @@
+/*
+ * Smart Locker Controller - Arduino ESP8266 Firmware
+ *
+ * Hardware: ESP8266 (Wemos D1 Mini / NodeMCU)
+ * Components:
+ * - Servo Motor (D1/GPIO5)
+ * - LED Red (D2/GPIO4)
+ * - LED Green (D3/GPIO0)
+ * - Buzzer (D4/GPIO2)
+ * - Button (D5/GPIO14) - manual unlock
+ *
+ * Communication: HTTP REST API
+ */
+
+#include <ESP8266WiFi.h>
+#include <Servo.h>
+#include <ArduinoJson.h>
+
+// ==================== CONFIGURATION ====================
+// WiFi Credentials - CHANGE THESE
+const char* WIFI_SSID = "YOUR_WIFI_SSID";
+const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+
+// Server Configuration - CHANGE TO YOUR SERVER IP
+const char* SERVER_HOST = "192.168.1.100";  // Server IP address
+const int SERVER_PORT = 3000;
+
+// Locker Configuration
+const int LOCKER_ID = 1;  // Change for each locker (1, 2, 3, 4)
+
+// Pin Configuration
+#define SERVO_PIN D1       // GPIO5
+#define LED_RED D2         // GPIO4
+#define LED_GREEN D3       // GPIO0
+#define BUZZER D4          // GPIO2
+#define BUTTON_PIN D5      // GPIO14
+
+// ==================== GLOBAL VARIABLES ====================
+Servo lockServo;
+bool isLocked = true;
+unsigned long lastHeartbeat = 0;
+unsigned long heartbeatInterval = 30000; // 30 seconds
+
+// WiFi Client
+WiFiClient client;
+
+// ==================== SETUP ====================
+void setup() {
+  Serial.begin(115200);
+  Serial.println("\n=== Smart Locker Controller v1.0 ===");
+  Serial.print("Locker ID: ");
+  Serial.println(LOCKER_ID);
+
+  // Initialize pins
+  pinMode(LED_RED, OUTPUT);
+  pinMode(LED_GREEN, OUTPUT);
+  pinMode(BUZZER, OUTPUT);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+
+  // Initialize servo
+  lockServo.attach(SERVO_PIN);
+  lockServo.write(0); // Start locked
+
+  // Initial LED status
+  digitalWrite(LED_RED, HIGH);
+  digitalWrite(LED_GREEN, LOW);
+  digitalWrite(BUZZER, LOW);
+
+  // Connect to WiFi
+  connectWiFi();
+
+  // Register with server
+  registerArduino();
+
+  Serial.println("=== Setup Complete ===");
+}
+
+// ==================== MAIN LOOP ====================
+void loop() {
+  // Check WiFi connection
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi disconnected! Reconnecting...");
+    connectWiFi();
+  }
+
+  // Send heartbeat to server
+  if (millis() - lastHeartbeat > heartbeatInterval) {
+    sendHeartbeat();
+    lastHeartbeat = millis();
+  }
+
+  // Check manual button press
+  if (digitalRead(BUTTON_PIN) == LOW) {
+    Serial.println("Manual unlock button pressed!");
+    unlock();
+    delay(1000);
+  }
+
+  // Check for commands from server
+  checkServerCommands();
+
+  delay(100);
+}
+
+// ==================== WIFI FUNCTIONS ====================
+void connectWiFi() {
+  Serial.print("Connecting to WiFi: ");
+  Serial.println(WIFI_SSID);
+
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 30) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\n✓ WiFi Connected!");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("\n✗ WiFi Connection Failed!");
+  }
+}
+
+// ==================== SERVER COMMUNICATION ====================
+void registerArduino() {
+  Serial.println("Registering with server...");
+
+  if (client.connect(SERVER_HOST, SERVER_PORT)) {
+    String json = "{\"ip\":\"" + WiFi.localIP().toString() +
+                  "\",\"port\":" + String(SERVER_PORT) +
+                  ",\"lockerId\":" + String(LOCKER_ID) + "}";
+
+    client.println("POST /api/arduino/register HTTP/1.1");
+    client.println("Host: " + String(SERVER_HOST));
+    client.println("Content-Type: application/json");
+    client.print("Content-Length: ");
+    client.println(json.length());
+    client.println();
+    client.println(json);
+
+    delay(500);
+    readServerResponse();
+    Serial.println("✓ Registration complete!");
+  } else {
+    Serial.println("✗ Failed to connect to server for registration");
+  }
+}
+
+void sendHeartbeat() {
+  if (client.connect(SERVER_HOST, SERVER_PORT)) {
+    String json = "{\"lockerId\":" + String(LOCKER_ID) +
+                  ",\"status\":\"" + (isLocked ? "LOCKED" : "UNLOCKED") +
+                  "\",\"ip\":\"" + WiFi.localIP().toString() + "\"}";
+
+    client.println("POST /api/arduino/heartbeat HTTP/1.1");
+    client.println("Host: " + String(SERVER_HOST));
+    client.println("Content-Type: application/json");
+    client.print("Content-Length: ");
+    client.println(json.length());
+    client.println();
+    client.println(json);
+
+    Serial.println("Heartbeat sent");
+  }
+}
+
+void checkServerCommands() {
+  // Simple approach: make GET request to check status
+  if (client.connect(SERVER_HOST, SERVER_PORT)) {
+    client.println("GET /api/locker/" + String(LOCKER_ID) + "/status HTTP/1.1");
+    client.println("Host: " + String(SERVER_HOST));
+    client.println("Connection: close");
+    client.println();
+
+    delay(500);
+
+    String response = "";
+    while (client.available()) {
+      char c = client.read();
+      response += c;
+    }
+
+    // Look for unlock command in response (simplified - in production use proper API)
+    if (response.indexOf("UNLOCK") != -1 || response.indexOf("unlock") != -1) {
+      unlock();
+    }
+  }
+}
+
+String readServerResponse() {
+  String response = "";
+  while (client.available()) {
+    char c = client.read();
+    response += c;
+  }
+  return response;
+}
+
+// ==================== LOCK FUNCTIONS ====================
+void lock() {
+  if (!isLocked) {
+    Serial.println("Locking locker...");
+    lockServo.write(0); // Rotate to locked position
+    isLocked = true;
+
+    // LED feedback
+    digitalWrite(LED_RED, HIGH);
+    digitalWrite(LED_GREEN, LOW);
+
+    // Buzzer feedback
+    beep(2);
+  }
+}
+
+void unlock() {
+  if (isLocked) {
+    Serial.println("Unlocking locker...");
+    lockServo.write(90); // Rotate to unlocked position
+    isLocked = false;
+
+    // LED feedback
+    digitalWrite(LED_RED, LOW);
+    digitalWrite(LED_GREEN, HIGH);
+
+    // Buzzer feedback
+    beep(3);
+    delay(3000); // Keep unlocked for 3 seconds
+
+    // Auto lock after 3 seconds
+    lock();
+  }
+}
+
+// ==================== UTILITY FUNCTIONS ====================
+void beep(int times) {
+  for (int i = 0; i < times; i++) {
+    digitalWrite(BUZZER, HIGH);
+    delay(100);
+    digitalWrite(BUZZER, LOW);
+    delay(100);
+  }
+}
+
+void statusLED(int pattern) {
+  // Pattern: 0 = off, 1 = green (ok), 2 = red (error), 3 = blinking
+  switch (pattern) {
+    case 0:
+      digitalWrite(LED_RED, LOW);
+      digitalWrite(LED_GREEN, LOW);
+      break;
+    case 1:
+      digitalWrite(LED_RED, LOW);
+      digitalWrite(LED_GREEN, HIGH);
+      break;
+    case 2:
+      digitalWrite(LED_RED, HIGH);
+      digitalWrite(LED_GREEN, LOW);
+      break;
+    case 3:
+      digitalWrite(LED_RED, HIGH);
+      digitalWrite(LED_GREEN, HIGH);
+      break;
+  }
+}
+
+// ==================== HTTP ENDPOINT HANDLERS ====================
+// Add these endpoints to handle commands from server
+// In production, use a proper web server library
+
+void handleUnlockCommand() {
+  unlock();
+}
+
+void handleLockCommand() {
+  lock();
+}
+
+/*
+ * ============================================================================
+ * INSTALLATION INSTRUCTIONS:
+ * ============================================================================
+ *
+ * 1. Hardware Setup:
+ *    - ESP8266 (Wemos D1 Mini recommended)
+ *    - Servo Motor MG996R connected to D1
+ *    - LED Red connected to D2
+ *    - LED Green connected to D3
+ *    - Buzzer connected to D4
+ *    - Push button connected to D5 (optional)
+ *
+ * 2. WiFi Configuration:
+ *    - Edit WIFI_SSID and WIFI_PASSWORD above
+ *
+ * 3. Server Configuration:
+ *    - Edit SERVER_HOST to your server's IP address
+ *    - Make sure server is running on port 3000
+ *
+ * 4. Upload:
+ *    - Select "Wemos D1 Mini" or "NodeMCU" board in Arduino IDE
+ *    - Upload sketch
+ *
+ * 5. Test:
+ *    - Open Serial Monitor at 115200 baud
+ *    - Check WiFi connection
+ *    - Register with server
+ *    - Test lock/unlock via API:
+ *      curl -X POST http://localhost:3000/api/locker/1/unlock
+ *
+ * ============================================================================
+ */

@@ -239,6 +239,69 @@ async function updateLockerStatus(lockerId, status) {
     return result.rows[0];
 }
 
+// =============================================
+// ARDUINO/IOT HELPER FUNCTIONS
+// =============================================
+const https = require('https');
+
+// Store registered Arduino devices
+let arduinoDevices = new Map();
+
+// Send command to Arduino via HTTP
+async function sendCommandToArduino(ip, port, command, data = {}) {
+    return new Promise((resolve, reject) => {
+        const postData = JSON.stringify(data);
+        const options = {
+            hostname: ip,
+            port: port || 80,
+            path: `/${command}`,
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(postData)
+            },
+            timeout: 5000
+        };
+
+        const req = https.request(options, (res) => {
+            let body = '';
+            res.on('data', chunk => body += chunk);
+            res.on('end', () => {
+                try {
+                    const json = JSON.parse(body);
+                    resolve(json);
+                } catch (e) {
+                    resolve({ success: true, message: body });
+                }
+            });
+        });
+
+        req.on('error', (err) => {
+            console.log('Arduino communication error:', err.message);
+            // Fallback: resolve as success since Arduino might be unreachable but will process later
+            resolve({ success: false, error: err.message, offline: true });
+        });
+
+        req.on('timeout', () => {
+            req.destroy();
+            resolve({ success: false, error: 'Timeout', offline: true });
+        });
+
+        req.write(postData);
+        req.end();
+    });
+}
+
+// Get Arduino device by locker ID
+function getArduinoByLocker(lockerId) {
+    for (const [key, device] of arduinoDevices) {
+        if (device.lockerId === lockerId) {
+            return device;
+        }
+    }
+    return null;
+}
+
 // --- Order Functions ---
 async function createOrder(orderData) {
     const { orderId, userId, lockerSize, duration, grossAmount, customerName, customerEmail, customerPhone } = orderData;
@@ -936,12 +999,24 @@ app.post('/api/tap', async (req, res) => {
             // Update locker status back to AVAILABLE
             await updateLockerStatus(usage.locker_id, 'AVAILABLE');
 
+            // Trigger Arduino unlock
+            const device = getArduinoByLocker(usage.locker_id);
+            let arduinoResult = { success: true, offline: true };
+            if (device) {
+                arduinoResult = await sendCommandToArduino(device.ip, device.port, 'unlock', {
+                    lockerId: usage.locker_id,
+                    status: 'UNLOCKED'
+                });
+                console.log(`✓ Arduino unlock triggered for locker ${usage.locker_id}`);
+            }
+
             res.json({
                 success: true,
                 status: "UNLOCK_SUCCESS",
                 message: "Locker berhasil dibuka",
                 pickup_code: usage.pickup_code,
-                user_name: userResult.rows[0].full_name
+                user_name: userResult.rows[0].full_name,
+                arduino: arduinoResult
             });
         } else {
             res.json({
@@ -1078,6 +1153,227 @@ app.get('/api/lockers', async (req, res) => {
             error: error.message
         });
     }
+});
+
+// =============================================
+// ARDUINO/IOT ENDPOINTS
+// =============================================
+
+// Register Arduino device
+app.post('/api/arduino/register', async (req, res) => {
+    try {
+        const { ip, port, lockerId, hardwareId } = req.body;
+
+        if (!ip || !lockerId) {
+            return res.status(400).json({
+                success: false,
+                error: 'IP dan lockerId wajib diisi'
+            });
+        }
+
+        const deviceKey = `locker-${lockerId}`;
+        arduinoDevices.set(deviceKey, {
+            ip,
+            port: port || 80,
+            lockerId,
+            hardwareId: hardwareId || `ARD-${lockerId}-${Date.now()}`,
+            registeredAt: new Date(),
+            lastHeartbeat: new Date()
+        });
+
+        console.log(`✓ Arduino registered for locker ${lockerId}: ${ip}:${port || 80}`);
+
+        res.json({
+            success: true,
+            message: 'Arduino device registered',
+            device: {
+                lockerId,
+                ip,
+                port: port || 80,
+                hardwareId: arduinoDevices.get(deviceKey).hardwareId
+            }
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// Arduino heartbeat/-status update
+app.post('/api/arduino/heartbeat', async (req, res) => {
+    try {
+        const { lockerId, status, ip, port } = req.body;
+
+        if (!lockerId) {
+            return res.status(400).json({
+                success: false,
+                error: 'lockerId wajib diisi'
+            });
+        }
+
+        const deviceKey = `locker-${lockerId}`;
+        if (arduinoDevices.has(deviceKey)) {
+            const device = arduinoDevices.get(deviceKey);
+            device.lastHeartbeat = new Date();
+            if (ip) device.ip = ip;
+            if (port) device.port = port;
+        } else {
+            // Auto-register if not found
+            arduinoDevices.set(deviceKey, {
+                ip: ip || 'unknown',
+                port: port || 80,
+                lockerId,
+                registeredAt: new Date(),
+                lastHeartbeat: new Date()
+            });
+        }
+
+        res.json({
+            success: true,
+            message: 'Heartbeat received'
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// Lock specific locker
+app.post('/api/locker/:lockerId/lock', async (req, res) => {
+    try {
+        const { lockerId } = req.params;
+        const id = parseInt(lockerId);
+
+        if (isNaN(id)) {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid locker ID'
+            });
+        }
+
+        // Update database
+        const updated = await updateLockerStatus(id, 'OCCUPIED');
+
+        // Send command to Arduino
+        const device = getArduinoByLocker(id);
+        let arduinoResult = { success: true, offline: true };
+        if (device) {
+            arduinoResult = await sendCommandToArduino(device.ip, device.port, 'lock', {
+                lockerId: id,
+                status: 'LOCKED'
+            });
+        }
+
+        res.json({
+            success: true,
+            message: 'Locker locked',
+            locker: updated,
+            arduino: arduinoResult
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// Unlock specific locker
+app.post('/api/locker/:lockerId/unlock', async (req, res) => {
+    try {
+        const { lockerId } = req.params;
+        const id = parseInt(lockerId);
+
+        if (isNaN(id)) {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid locker ID'
+            });
+        }
+
+        // Update database
+        const updated = await updateLockerStatus(id, 'AVAILABLE');
+
+        // Send command to Arduino
+        const device = getArduinoByLocker(id);
+        let arduinoResult = { success: true, offline: true };
+        if (device) {
+            arduinoResult = await sendCommandToArduino(device.ip, device.port, 'unlock', {
+                lockerId: id,
+                status: 'UNLOCKED'
+            });
+            console.log(`✓ Unlock command sent to Arduino for locker ${id}`);
+        } else {
+            console.log(`⚠ No Arduino registered for locker ${id} - proceeding with software unlock only`);
+        }
+
+        res.json({
+            success: true,
+            message: 'Locker unlocked',
+            locker: updated,
+            arduino: arduinoResult
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// Get locker status
+app.get('/api/locker/:lockerId/status', async (req, res) => {
+    try {
+        const { lockerId } = req.params;
+        const id = parseInt(lockerId);
+
+        const result = await pool.query(`SELECT * FROM "Locker" WHERE id = $1`, [id]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                error: 'Locker not found'
+            });
+        }
+
+        // Check if Arduino is connected
+        const device = getArduinoByLocker(id);
+
+        res.json({
+            success: true,
+            locker: result.rows[0],
+            arduino: device ? {
+                connected: true,
+                ip: device.ip,
+                port: device.port,
+                lastHeartbeat: device.lastHeartbeat
+            } : {
+                connected: false
+            }
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// Get registered Arduino devices
+app.get('/api/arduino/devices', (req, res) => {
+    const devices = [];
+    for (const [key, device] of arduinoDevices) {
+        devices.push(device);
+    }
+    res.json({
+        success: true,
+        count: devices.length,
+        devices
+    });
 });
 
 // 8. Get All Users
