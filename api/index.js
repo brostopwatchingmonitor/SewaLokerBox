@@ -5,6 +5,13 @@ const cors = require('cors');
 const { Pool } = require('pg');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const logger = require('../utils/logger');
+const requestLogger = require('../middleware/request-logger');
+const errorHandler = require('../middleware/error-handler');
+const { sanitizeForLogging } = require('../utils/sanitizer');
+const { logValidationError } = require('../middleware/validation-error-logger');
+const { logIotError, recordIotSuccess } = require('../middleware/iot-error-logger');
+
 const app = express();
 
 const JWT_SECRET = process.env.JWT_SECRET || 'sewaloker-secret-key-2024';
@@ -21,8 +28,31 @@ const pool = new Pool({
 
 // Test connection on startup
 pool.query('SELECT NOW()')
-    .then(() => console.log('Database: ✓ Connected'))
-    .catch(err => console.log('Database: ✗ Failed -', err.message));
+    .then(() => {
+        console.log('Database: ✓ Connected');
+        logger.info({
+            timestamp: new Date().toISOString(),
+            level: 'INFO',
+            service: 'sewalokerbox-api',
+            message: 'Database connected successfully'
+        });
+    })
+    .catch(err => {
+        console.log('Database: ✗ Failed -', err.message);
+        logger.error({
+            timestamp: new Date().toISOString(),
+            level: 'ERROR',
+            service: 'sewalokerbox-api',
+            message: 'Database connection failed',
+            error: {
+                type: err.constructor.name,
+                message: err.message,
+                stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+            },
+            tags: ['database', 'connection'],
+            severity: 'P1'
+        });
+    });
 
 // =============================================
 // MIDTRANS CONFIGURATION
@@ -53,12 +83,17 @@ app.use(cors({
     methods: ['GET', 'POST', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
+// =============================================
+// MIDDLEWARE
+// =============================================
+app.use(requestLogger); // Request logging middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static('public'));
 
 // =============================================
-// HELPER FUNCTION
+// HELPER FUNCTIONS
 // =============================================
 async function createMidtransToken(orderId, grossAmount, itemDetails, customerDetails = {}) {
     try {
@@ -93,7 +128,24 @@ async function createMidtransToken(orderId, grossAmount, itemDetails, customerDe
         };
 
     } catch (error) {
-        console.error('Midtrans Token Creation Error:', error);
+        logger.error({
+            timestamp: new Date().toISOString(),
+            level: 'ERROR',
+            service: 'sewalokerbox-api',
+            message: 'Midtrans Token Creation Error',
+            error: {
+                type: error.constructor.name,
+                message: error.message,
+                stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+            },
+            context: {
+                orderId,
+                grossAmount
+            },
+            tags: ['midtrans', 'token-creation'],
+            severity: 'P2'
+        });
+
         return {
             success: false,
             error: error.message || 'Failed to create transaction token'
@@ -187,10 +239,10 @@ async function findOrCreateUser(customerName, customerEmail, customerPhone) {
     // Create new user
     const id = generateUUID();
     result = await pool.query(`
-        INSERT INTO "User" (id, full_name, email, phone_number, balance, "createdAt")
-        VALUES ($1, $2, $3, $4, 0, NOW())
+        INSERT INTO "User" (id, full_name, email, phone_number, password, balance, "createdAt")
+        VALUES ($1, $2, $3, $4, $5, 0, NOW())
         RETURNING *
-    `, [id, customerName || 'Pelanggan', customerEmail, customerPhone]);
+    `, [id, customerName || 'Pelanggan', customerEmail, customerPhone, null]);
 
     console.log('✓ New user created:', result.rows[0].id);
     return result.rows[0];
@@ -249,6 +301,7 @@ let arduinoDevices = new Map();
 
 // Send command to Arduino via HTTP
 async function sendCommandToArduino(ip, port, command, data = {}) {
+    const lockerId = data.lockerId || data.locker_id || 'unknown';
     return new Promise((resolve, reject) => {
         const postData = JSON.stringify(data);
         const options = {
@@ -269,8 +322,10 @@ async function sendCommandToArduino(ip, port, command, data = {}) {
             res.on('end', () => {
                 try {
                     const json = JSON.parse(body);
+                    recordIotSuccess(lockerId);
                     resolve(json);
                 } catch (e) {
+                    recordIotSuccess(lockerId);
                     resolve({ success: true, message: body });
                 }
             });
@@ -278,12 +333,14 @@ async function sendCommandToArduino(ip, port, command, data = {}) {
 
         req.on('error', (err) => {
             console.log('Arduino communication error:', err.message);
+            logIotError(err, lockerId, command);
             // Fallback: resolve as success since Arduino might be unreachable but will process later
             resolve({ success: false, error: err.message, offline: true });
         });
 
         req.on('timeout', () => {
             req.destroy();
+            logIotError(new Error('Timeout'), lockerId, command);
             resolve({ success: false, error: 'Timeout', offline: true });
         });
 
@@ -365,7 +422,6 @@ async function getAllOrders(limit = 50) {
 }
 
 // --- UsageTransaction Functions ---
-// --- UsageTransaction Functions ---
 async function createUsageTransaction(usageData) {
     const {
         userId,
@@ -386,7 +442,7 @@ async function createUsageTransaction(usageData) {
     const result = await pool.query(`
         INSERT INTO "UsageTransaction" (
             id, category, user_id, recipient_phone, pickup_code,
-            locker_id, duration_plan, base_fee, status, 
+            locker_id, duration_plan, base_fee, status,
             started_at, ended_at
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'ACTIVE', NOW(), NULL)
@@ -403,6 +459,21 @@ async function createUsageTransaction(usageData) {
     ]);
 
     console.log('✓ UsageTransaction created:', result.rows[0].id);
+    logger.info({
+        timestamp: new Date().toISOString(),
+        level: 'INFO',
+        service: 'sewalokerbox-api',
+        message: 'UsageTransaction created',
+        context: {
+            usageId: result.rows[0].id,
+            userId,
+            lockerId,
+            orderId
+        },
+        tags: ['usage-transaction', 'create'],
+        severity: 'P3'
+    });
+
     return result.rows[0];
 }
 
@@ -454,6 +525,14 @@ app.post('/api/auth/register', async (req, res) => {
         const { fullName, email, phoneNumber, password } = req.body;
 
         if (!fullName || !email || !phoneNumber || !password) {
+            const missingField = !fullName ? 'fullName' : (!email ? 'email' : (!phoneNumber ? 'phoneNumber' : 'password'));
+            logValidationError(new Error('Semua field wajib diisi'), req, {
+                message: 'Semua field wajib diisi',
+                field: missingField,
+                value: req.body[missingField],
+                rule: 'required',
+                severity: 'low'
+            });
             return res.status(400).json({
                 success: false,
                 error: 'Semua field wajib diisi'
@@ -463,6 +542,13 @@ app.post('/api/auth/register', async (req, res) => {
         // Check if user already exists
         const existingUser = await findUserByEmail(email);
         if (existingUser) {
+            logValidationError(new Error('Email sudah terdaftar'), req, {
+                message: 'Email sudah terdaftar',
+                field: 'email',
+                value: email,
+                rule: 'unique',
+                severity: 'low'
+            });
             return res.status(400).json({
                 success: false,
                 error: 'Email sudah terdaftar'
@@ -472,6 +558,13 @@ app.post('/api/auth/register', async (req, res) => {
         // Check if phone already exists
         const existingPhone = await findUserByPhone(phoneNumber);
         if (existingPhone) {
+            logValidationError(new Error('Nomor telepon sudah terdaftar'), req, {
+                message: 'Nomor telepon sudah terdaftar',
+                field: 'phoneNumber',
+                value: phoneNumber,
+                rule: 'unique',
+                severity: 'low'
+            });
             return res.status(400).json({
                 success: false,
                 error: 'Nomor telepon sudah terdaftar'
@@ -493,6 +586,18 @@ app.post('/api/auth/register', async (req, res) => {
         const token = generateToken(user);
 
         console.log('✓ New user registered:', user.id);
+        logger.info({
+            timestamp: new Date().toISOString(),
+            level: 'INFO',
+            service: 'sewalokerbox-api',
+            message: 'New user registered',
+            context: {
+                userId: user.id,
+                email: user.email
+            },
+            tags: ['auth', 'register'],
+            severity: 'P3'
+        });
 
         res.json({
             success: true,
@@ -508,6 +613,22 @@ app.post('/api/auth/register', async (req, res) => {
 
     } catch (error) {
         console.error('Register Error:', error);
+        logger.error({
+            timestamp: new Date().toISOString(),
+            level: 'ERROR',
+            service: 'sewalokerbox-api',
+            message: 'Register Error',
+            error: {
+                type: error.constructor.name,
+                message: error.message,
+                stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+            },
+            context: {
+                body: sanitizeForLogging(req.body)
+            },
+            tags: ['auth', 'register', 'error'],
+            severity: 'P2'
+        });
         res.status(500).json({
             success: false,
             error: error.message
@@ -521,6 +642,14 @@ app.post('/api/auth/login', async (req, res) => {
         const { email, password } = req.body;
 
         if (!email || !password) {
+            const missingField = !email ? 'email' : 'password';
+            logValidationError(new Error('Email dan password wajib diisi'), req, {
+                message: 'Email dan password wajib diisi',
+                field: missingField,
+                value: req.body[missingField],
+                rule: 'required',
+                severity: 'low'
+            });
             return res.status(400).json({
                 success: false,
                 error: 'Email dan password wajib diisi'
@@ -548,6 +677,18 @@ app.post('/api/auth/login', async (req, res) => {
         const token = generateToken(user);
 
         console.log('✓ User logged in:', user.id);
+        logger.info({
+            timestamp: new Date().toISOString(),
+            level: 'INFO',
+            service: 'sewalokerbox-api',
+            message: 'User logged in',
+            context: {
+                userId: user.id,
+                email: user.email
+            },
+            tags: ['auth', 'login'],
+            severity: 'P3'
+        });
 
         res.json({
             success: true,
@@ -565,6 +706,22 @@ app.post('/api/auth/login', async (req, res) => {
 
     } catch (error) {
         console.error('Login Error:', error);
+        logger.error({
+            timestamp: new Date().toISOString(),
+            level: 'ERROR',
+            service: 'sewalokerbox-api',
+            message: 'Login Error',
+            error: {
+                type: error.constructor.name,
+                message: error.message,
+                stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+            },
+            context: {
+                body: sanitizeForLogging(req.body)
+            },
+            tags: ['auth', 'login', 'error'],
+            severity: 'P2'
+        });
         res.status(500).json({
             success: false,
             error: error.message
@@ -604,6 +761,22 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
 
     } catch (error) {
         console.error('Get Profile Error:', error);
+        logger.error({
+            timestamp: new Date().toISOString(),
+            level: 'ERROR',
+            service: 'sewalokerbox-api',
+            message: 'Get Profile Error',
+            error: {
+                type: error.constructor.name,
+                message: error.message,
+                stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+            },
+            context: {
+                userId: req.user?.id
+            },
+            tags: ['auth', 'profile', 'error'],
+            severity: 'P2'
+        });
         res.status(500).json({
             success: false,
             error: error.message
@@ -644,6 +817,23 @@ app.put('/api/auth/profile', authenticateToken, async (req, res) => {
 
     } catch (error) {
         console.error('Update Profile Error:', error);
+        logger.error({
+            timestamp: new Date().toISOString(),
+            level: 'ERROR',
+            service: 'sewalokerbox-api',
+            message: 'Update Profile Error',
+            error: {
+                type: error.constructor.name,
+                message: error.message,
+                stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+            },
+            context: {
+                userId: req.user?.id,
+                body: sanitizeForLogging(req.body)
+            },
+            tags: ['auth', 'profile', 'error'],
+            severity: 'P2'
+        });
         res.status(500).json({
             success: false,
             error: error.message
@@ -697,6 +887,23 @@ app.put('/api/auth/password', authenticateToken, async (req, res) => {
 
     } catch (error) {
         console.error('Change Password Error:', error);
+        logger.error({
+            timestamp: new Date().toISOString(),
+            level: 'ERROR',
+            service: 'sewalokerbox-api',
+            message: 'Change Password Error',
+            error: {
+                type: error.constructor.name,
+                message: error.message,
+                stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+            },
+            context: {
+                userId: req.user?.id,
+                body: sanitizeForLogging(req.body)
+            },
+            tags: ['auth', 'password', 'error'],
+            severity: 'P2'
+        });
         res.status(500).json({
             success: false,
             error: error.message
@@ -742,6 +949,26 @@ app.post('/api/create-order', async (req, res) => {
         console.log('Gross Amount:', grossAmount);
         console.log('User ID:', userId || 'Anonymous');
         console.log('========================\n');
+
+        logger.info({
+            timestamp: new Date().toISOString(),
+            level: 'INFO',
+            service: 'sewalokerbox-api',
+            message: 'Creating order',
+            context: {
+                orderId,
+                lockerSize,
+                duration,
+                price,
+                grossAmount,
+                customerName,
+                customerEmail,
+                customerPhone,
+                userId
+            },
+            tags: ['order', 'create'],
+            severity: 'P3'
+        });
 
         let user;
 
@@ -798,6 +1025,20 @@ app.post('/api/create-order', async (req, res) => {
         console.log('✓ User:', user.id);
         console.log('✓ Locker:', locker.id);
 
+        logger.info({
+            timestamp: new Date().toISOString(),
+            level: 'INFO',
+            service: 'sewalokerbox-api',
+            message: 'Order created in database',
+            context: {
+                orderId: order.order_id,
+                userId: user.id,
+                lockerId: locker.id
+            },
+            tags: ['order', 'database'],
+            severity: 'P3'
+        });
+
         // Item details for Midtrans
         const itemDetails = [{
             id: `LOKER-${lockerSize.toUpperCase()}`,
@@ -842,6 +1083,22 @@ app.post('/api/create-order', async (req, res) => {
 
     } catch (error) {
         console.error('API Error:', error);
+        logger.error({
+            timestamp: new Date().toISOString(),
+            level: 'ERROR',
+            service: 'sewalokerbox-api',
+            message: 'API Error in create-order',
+            error: {
+                type: error.constructor.name,
+                message: error.message,
+                stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+            },
+            context: {
+                body: sanitizeForLogging(req.body)
+            },
+            tags: ['api', 'create-order', 'error'],
+            severity: 'P2'
+        });
         res.status(500).json({
             success: false,
             error: error.message
@@ -854,6 +1111,18 @@ app.post('/api/webhook', async (req, res) => {
     try {
         const notification = req.body;
         console.log('Webhook received:', JSON.stringify(notification, null, 2));
+
+        logger.info({
+            timestamp: new Date().toISOString(),
+            level: 'INFO',
+            service: 'sewalokerbox-api',
+            message: 'Webhook received',
+            context: {
+                notification: sanitizeForLogging(notification)
+            },
+            tags: ['webhook', 'midtrans'],
+            severity: 'P3'
+        });
 
         // Verify notification with Midtrans
         const statusResponse = await snap.transaction.notification(notification);
@@ -889,6 +1158,20 @@ app.post('/api/webhook', async (req, res) => {
         if (updatedOrder) {
             console.log('✓ Order updated:', updatedOrder.order_id, '->', updatedOrder.payment_status);
 
+            logger.info({
+                timestamp: new Date().toISOString(),
+                level: 'INFO',
+                service: 'sewalokerbox-api',
+                message: 'Order updated via webhook',
+                context: {
+                    orderId: updatedOrder.order_id,
+                    paymentStatus: updatedOrder.payment_status,
+                    transactionId
+                },
+                tags: ['order', 'update', 'webhook'],
+                severity: 'P3'
+            });
+
             // If payment is successful, create UsageTransaction
             if (paymentStatus === 'PAID' && updatedOrder.user_id) {
                 // Generate pickup code
@@ -913,6 +1196,17 @@ app.post('/api/webhook', async (req, res) => {
             }
         } else {
             console.log('⚠ Order not found in database:', orderId);
+            logger.warn({
+                timestamp: new Date().toISOString(),
+                level: 'WARN',
+                service: 'sewalokerbox-api',
+                message: 'Order not found in database',
+                context: {
+                    orderId
+                },
+                tags: ['webhook', 'order', 'not-found'],
+                severity: 'P3'
+            });
         }
 
         res.status(200).json({
@@ -924,6 +1218,22 @@ app.post('/api/webhook', async (req, res) => {
 
     } catch (error) {
         console.error("Webhook Error:", error);
+        logger.error({
+            timestamp: new Date().toISOString(),
+            level: 'ERROR',
+            service: 'sewalokerbox-api',
+            message: 'Webhook Error',
+            error: {
+                type: error.constructor.name,
+                message: error.message,
+                stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+            },
+            context: {
+                body: sanitizeForLogging(req.body)
+            },
+            tags: ['webhook', 'error'],
+            severity: 'P2'
+        });
         res.status(500).json({
             success: false,
             error: error.message
@@ -1010,6 +1320,20 @@ app.post('/api/tap', async (req, res) => {
                     status: 'UNLOCKED'
                 });
                 console.log(`✓ Arduino unlock triggered for locker ${usage.locker_id}`);
+
+                logger.info({
+                    timestamp: new Date().toISOString(),
+                    level: 'INFO',
+                    service: 'sewalokerbox-iot',
+                    message: `Arduino unlock triggered for locker ${usage.locker_id}`,
+                    context: {
+                        lockerId: usage.locker_id,
+                        ip: device.ip,
+                        port: device.port
+                    },
+                    tags: ['iot', 'arduino', 'unlock'],
+                    severity: 'P3'
+                });
             }
 
             res.json({
@@ -1030,6 +1354,22 @@ app.post('/api/tap', async (req, res) => {
         }
     } catch (error) {
         console.error('NFC Tap Error:', error);
+        logger.error({
+            timestamp: new Date().toISOString(),
+            level: 'ERROR',
+            service: 'sewalokerbox-api',
+            message: 'NFC Tap Error',
+            error: {
+                type: error.constructor.name,
+                message: error.message,
+                stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+            },
+            context: {
+                nfc_uid: req.body.nfc_uid
+            },
+            tags: ['nfc', 'tap', 'error'],
+            severity: 'P2'
+        });
         res.status(500).json({
             success: false,
             error: error.message
@@ -1184,6 +1524,20 @@ app.post('/api/arduino/register', async (req, res) => {
         });
 
         console.log(`✓ Arduino registered for locker ${lockerId}: ${ip}:${port || 80}`);
+        logger.info({
+            timestamp: new Date().toISOString(),
+            level: 'INFO',
+            service: 'sewalokerbox-iot',
+            message: `Arduino registered for locker ${lockerId}`,
+            context: {
+                lockerId,
+                ip,
+                port: port || 80,
+                hardwareId: hardwareId || `ARD-${lockerId}-${Date.now()}`
+            },
+            tags: ['iot', 'arduino', 'register'],
+            severity: 'P3'
+        });
 
         res.json({
             success: true,
@@ -1236,10 +1590,43 @@ app.post('/api/arduino/heartbeat', async (req, res) => {
             success: true,
             message: 'Heartbeat received'
         });
+
+        logger.debug({
+            timestamp: new Date().toISOString(),
+            level: 'DEBUG',
+            service: 'sewalokerbox-iot',
+            message: 'Heartbeat received',
+            context: {
+                lockerId,
+                status,
+                ip,
+                port
+            },
+            tags: ['iot', 'arduino', 'heartbeat'],
+            severity: 'P4'
+        });
     } catch (error) {
         res.status(500).json({
             success: false,
             error: error.message
+        });
+
+        logger.error({
+            timestamp: new Date().toISOString(),
+            level: 'ERROR',
+            service: 'sewalokerbox-iot',
+            message: 'Heartbeat error',
+            error: {
+                type: error.constructor.name,
+                message: error.message
+            },
+            context: {
+                lockerId: req.body.lockerId,
+                ip: req.body.ip,
+                port: req.body.port
+            },
+            tags: ['iot', 'arduino', 'heartbeat', 'error'],
+            severity: 'P2'
         });
     }
 });
@@ -1276,10 +1663,38 @@ app.post('/api/locker/:lockerId/lock', async (req, res) => {
             locker: updated,
             arduino: arduinoResult
         });
+
+        logger.info({
+            timestamp: new Date().toISOString(),
+            level: 'INFO',
+            service: 'sewalokerbox-iot',
+            message: `Locker ${id} locked`,
+            context: {
+                lockerId: id
+            },
+            tags: ['iot', 'locker', 'lock'],
+            severity: 'P3'
+        });
     } catch (error) {
         res.status(500).json({
             success: false,
             error: error.message
+        });
+
+        logger.error({
+            timestamp: new Date().toISOString(),
+            level: 'ERROR',
+            service: 'sewalokerbox-iot',
+            message: 'Locker lock error',
+            error: {
+                type: error.constructor.name,
+                message: error.message
+            },
+            context: {
+                lockerId: req.params.lockerId
+            },
+            tags: ['iot', 'locker', 'lock', 'error'],
+            severity: 'P2'
         });
     }
 });
@@ -1309,8 +1724,34 @@ app.post('/api/locker/:lockerId/unlock', async (req, res) => {
                 status: 'UNLOCKED'
             });
             console.log(`✓ Unlock command sent to Arduino for locker ${id}`);
+
+            logger.info({
+                timestamp: new Date().toISOString(),
+                level: 'INFO',
+                service: 'sewalokerbox-iot',
+                message: `Unlock command sent to Arduino for locker ${id}`,
+                context: {
+                    lockerId: id,
+                    ip: device.ip,
+                    port: device.port
+                },
+                tags: ['iot', 'locker', 'unlock'],
+                severity: 'P3'
+            });
         } else {
             console.log(`⚠ No Arduino registered for locker ${id} - proceeding with software unlock only`);
+
+            logger.warn({
+                timestamp: new Date().toISOString(),
+                level: 'WARN',
+                service: 'sewalokerbox-iot',
+                message: `No Arduino registered for locker ${id}`,
+                context: {
+                    lockerId: id
+                },
+                tags: ['iot', 'locker', 'unlock', 'missing-device'],
+                severity: 'P3'
+            });
         }
 
         res.json({
@@ -1319,10 +1760,38 @@ app.post('/api/locker/:lockerId/unlock', async (req, res) => {
             locker: updated,
             arduino: arduinoResult
         });
+
+        logger.info({
+            timestamp: new Date().toISOString(),
+            level: 'INFO',
+            service: 'sewalokerbox-iot',
+            message: `Locker ${id} unlocked`,
+            context: {
+                lockerId: id
+            },
+            tags: ['iot', 'locker', 'unlock'],
+            severity: 'P3'
+        });
     } catch (error) {
         res.status(500).json({
             success: false,
             error: error.message
+        });
+
+        logger.error({
+            timestamp: new Date().toISOString(),
+            level: 'ERROR',
+            service: 'sewalokerbox-iot',
+            message: 'Locker unlock error',
+            error: {
+                type: error.constructor.name,
+                message: error.message
+            },
+            context: {
+                lockerId: req.params.lockerId
+            },
+            tags: ['iot', 'locker', 'unlock', 'error'],
+            severity: 'P2'
         });
     }
 });
@@ -1357,10 +1826,38 @@ app.get('/api/locker/:lockerId/status', async (req, res) => {
                 connected: false
             }
         });
+
+        logger.debug({
+            timestamp: new Date().toISOString(),
+            level: 'DEBUG',
+            service: 'sewalokerbox-iot',
+            message: `Locker ${id} status checked`,
+            context: {
+                lockerId: id
+            },
+            tags: ['iot', 'locker', 'status'],
+            severity: 'P4'
+        });
     } catch (error) {
         res.status(500).json({
             success: false,
             error: error.message
+        });
+
+        logger.error({
+            timestamp: new Date().toISOString(),
+            level: 'ERROR',
+            service: 'sewalokerbox-iot',
+            message: 'Locker status error',
+            error: {
+                type: error.constructor.name,
+                message: error.message
+            },
+            context: {
+                lockerId: req.params.lockerId
+            },
+            tags: ['iot', 'locker', 'status', 'error'],
+            severity: 'P2'
         });
     }
 });
@@ -1538,8 +2035,12 @@ app.get('/', (req, res) => {
     `);
 });
 
+// Centralized error handler middleware (must be registered after all routes)
+app.use(errorHandler);
+
 // =============================================
 // DATABASE MIGRATION (One-time)
+// =============================================
 async function runMigrations() {
     try {
         // Add password column if not exists
@@ -1558,12 +2059,33 @@ runMigrations().then(() => {
     app.listen(PORT, () => {
         console.log(`\n🚀 Server running on http://localhost:${PORT}`);
         console.log(`📱 Midtrans Mode: ${MIDTRANS_IS_PRODUCTION ? 'PRODUCTION' : 'SANDBOX'}\n`);
+
+        logger.info({
+            timestamp: new Date().toISOString(),
+            level: 'INFO',
+            service: 'sewalokerbox-api',
+            message: 'Server started',
+            context: {
+                port: PORT,
+                midtransMode: MIDTRANS_IS_PRODUCTION ? 'PRODUCTION' : 'SANDBOX'
+            },
+            tags: ['server', 'startup'],
+            severity: 'P3'
+        });
     });
 });
 
 // Graceful shutdown
 process.on('SIGINT', () => {
     console.log('\nShutting down...');
+    logger.info({
+        timestamp: new Date().toISOString(),
+        level: 'INFO',
+        service: 'sewalokerbox-api',
+        message: 'Server shutting down',
+        tags: ['server', 'shutdown'],
+        severity: 'P3'
+    });
     pool.end();
     process.exit(0);
 });
