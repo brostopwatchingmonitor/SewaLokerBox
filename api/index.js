@@ -2,7 +2,8 @@ require('dotenv').config();
 const express = require('express');
 const midtransClient = require('midtrans-client');
 const cors = require('cors');
-const { Pool } = require('pg');
+const { connectToDatabase } = require('../utils/db');
+const { ObjectId } = require('mongodb');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const logger = require('../utils/logger');
@@ -17,19 +18,13 @@ const app = express();
 const JWT_SECRET = process.env.JWT_SECRET || 'sewaloker-secret-key-2024';
 
 // =============================================
-// DATABASE SETUP (Using pg for direct connection)
+// DATABASE SETUP (Using MongoDB with caching)
 // =============================================
-const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: {
-        rejectUnauthorized: false
-    }
-});
 
 // Test connection on startup
-pool.query('SELECT NOW()')
+connectToDatabase()
     .then(() => {
-        console.log('Database: ✓ Connected');
+        console.log('Database: ✓ Connected (MongoDB)');
         logger.info({
             timestamp: new Date().toISOString(),
             level: 'INFO',
@@ -209,86 +204,197 @@ function authenticateToken(req, res, next) {
     next();
 }
 
+// --- MongoDB Mapping Helpers ---
+function mapUser(user) {
+    if (!user) return null;
+    return {
+        id: user._id.toString(),
+        nfc_uid: user.nfc_uid || null,
+        full_name: user.full_name,
+        email: user.email || null,
+        phone_number: user.phone_number || null,
+        password: user.security?.password || null,
+        balance: user.wallet_balance || 0,
+        createdAt: user.created_at
+    };
+}
+
+function mapLocker(box) {
+    if (!box) return null;
+    return {
+        id: box.legacy_locker_id || box.box_id.toString(),
+        size_type: box.size_type,
+        price_h: box.price_per_hour || 0,
+        status: box.is_available ? 'AVAILABLE' : 'OCCUPIED'
+    };
+}
+
+function mapOrder(order) {
+    if (!order) return null;
+    return {
+        id: order._id.toString(),
+        order_id: order.order_id,
+        user_id: order.user_id ? order.user_id.toString() : null,
+        locker_size: order.locker_size,
+        duration: order.duration,
+        gross_amount: order.gross_amount,
+        payment_status: order.payment_status,
+        transaction_id: order.transaction_id || null,
+        customer_name: order.customer_name || null,
+        customer_email: order.customer_email || null,
+        customer_phone: order.customer_phone || null,
+        payment_date: order.payment_date || null,
+        created_at: order.created_at,
+        updated_at: order.updated_at
+    };
+}
+
+function mapTransaction(txn) {
+    if (!txn) return null;
+    return {
+        id: txn._id.toString(),
+        category: txn.category,
+        user_id: txn.parties.owner_id ? txn.parties.owner_id.toString() : null,
+        sender_phone: txn.parties.sender_phone || null,
+        courier_name: txn.parties.courier_name || null,
+        resi_number: txn.parties.resi_number || null,
+        recipient_phone: txn.parties.recipient_phone,
+        pickup_code: txn.pickup_code,
+        locker_id: txn.box_reference.legacy_locker_id || null,
+        started_at: txn.timestamps.started_at,
+        duration_plan: txn.duration_plan || null,
+        ended_at: txn.timestamps.ended_at || null,
+        base_fee: txn.fees.base_fee,
+        extension_fee: txn.fees.extension_fee || 0,
+        status: txn.status
+    };
+}
+
+// Helper to support both legacy UUID string keys and BSON ObjectIds
+function getUserQuery(id) {
+    if (!id) return { _id: null };
+    if (ObjectId.isValid(id) && id.toString().length === 24) {
+        return { _id: new ObjectId(id) };
+    }
+    return { legacy_id: id };
+}
+
+// Helper to resolve any format of user ID to MongoDB BSON ObjectId
+async function resolveMongoUserId(userId) {
+    if (!userId) return null;
+    const { db } = await connectToDatabase();
+    const query = getUserQuery(userId);
+    const user = await db.collection('users').findOne(query);
+    return user ? user._id : null;
+}
+
 // --- User Functions ---
 async function findUserByEmail(email) {
-    const result = await pool.query(`
-        SELECT * FROM "User" WHERE email = $1
-    `, [email]);
-    return result.rows[0] || null;
+    const { db } = await connectToDatabase();
+    const user = await db.collection('users').findOne({ email });
+    return mapUser(user);
 }
 
 async function findUserByPhone(phone) {
-    const result = await pool.query(`
-        SELECT * FROM "User" WHERE phone_number = $1
-    `, [phone]);
-    return result.rows[0] || null;
+    const { db } = await connectToDatabase();
+    const user = await db.collection('users').findOne({ phone_number: phone });
+    return mapUser(user);
 }
 
 async function findOrCreateUser(customerName, customerEmail, customerPhone) {
-    // Try to find existing user by email or phone
-    let result = await pool.query(`
-        SELECT * FROM "User"
-        WHERE email = $1 OR phone_number = $2
-    `, [customerEmail, customerPhone]);
-
-    if (result.rows.length > 0) {
-        console.log('✓ Existing user found:', result.rows[0].id);
-        return result.rows[0];
+    const { db } = await connectToDatabase();
+    const query = [];
+    if (customerEmail) query.push({ email: customerEmail });
+    if (customerPhone) query.push({ phone_number: customerPhone });
+    
+    let user = null;
+    if (query.length > 0) {
+        user = await db.collection('users').findOne({ $or: query });
+    }
+    
+    if (user) {
+        console.log('✓ Existing user found:', user._id.toString());
+        return mapUser(user);
     }
 
     // Create new user
-    const id = generateUUID();
-    result = await pool.query(`
-        INSERT INTO "User" (id, full_name, email, phone_number, password, balance, "createdAt")
-        VALUES ($1, $2, $3, $4, $5, 0, NOW())
-        RETURNING *
-    `, [id, customerName || 'Pelanggan', customerEmail, customerPhone, null]);
-
-    console.log('✓ New user created:', result.rows[0].id);
-    return result.rows[0];
+    const mongoId = new ObjectId();
+    const newUser = {
+        _id: mongoId,
+        full_name: customerName || 'Pelanggan',
+        email: customerEmail || undefined,
+        phone_number: customerPhone || undefined,
+        security: { password: '' },
+        wallet_balance: 0,
+        created_at: new Date(),
+        updated_at: new Date()
+    };
+    await db.collection('users').insertOne(newUser);
+    console.log('✓ New user created:', mongoId.toString());
+    return mapUser(newUser);
 }
 
 async function updateUserBalance(userId, newBalance) {
-    const result = await pool.query(`
-        UPDATE "User" SET balance = $2 WHERE id = $1 RETURNING *
-    `, [userId, newBalance]);
-    return result.rows[0];
+    const { db } = await connectToDatabase();
+    const query = getUserQuery(userId);
+    await db.collection('users').updateOne(
+        query,
+        { $set: { wallet_balance: parseFloat(newBalance), updated_at: new Date() } }
+    );
+    const user = await db.collection('users').findOne(query);
+    return mapUser(user);
 }
 
 // --- Locker Functions ---
 async function findAvailableLocker(sizeType) {
-    // sizeType: "Small" maps to locker size S or M, "Large" maps to L
-    let sizeMapping;
-    if (sizeType === 'Small') {
-        sizeMapping = ['S', 'M'];
-    } else {
-        sizeMapping = ['L'];
+    const { db } = await connectToDatabase();
+    let sizeMapping = sizeType === 'Small' ? ['S', 'M'] : ['L'];
+    
+    const station = await db.collection('locker_stations').findOne({
+        connectivity_status: 'ONLINE',
+        boxes: {
+            $elemMatch: {
+                size_type: { $in: sizeMapping },
+                is_available: true
+            }
+        }
+    });
+
+    if (station) {
+        const box = station.boxes.find(b => sizeMapping.includes(b.size_type) && b.is_available);
+        console.log('✓ Available locker found:', box.legacy_locker_id);
+        return mapLocker(box);
     }
 
-    const result = await pool.query(`
-        SELECT * FROM "Locker"
-        WHERE size_type = ANY($1) AND status = 'AVAILABLE'
-        LIMIT 1
-    `, [sizeMapping]);
-
-    if (result.rows.length > 0) {
-        console.log('✓ Available locker found:', result.rows[0].id);
-        return result.rows[0];
+    // Fallback: get first box matching size mapping
+    const fallbackStation = await db.collection('locker_stations').findOne({
+        boxes: { $elemMatch: { size_type: { $in: sizeMapping } } }
+    });
+    if (fallbackStation) {
+        const box = fallbackStation.boxes.find(b => sizeMapping.includes(b.size_type));
+        return mapLocker(box);
     }
-
-    // If no locker available, return first locker of type
-    const fallbackResult = await pool.query(`
-        SELECT * FROM "Locker" WHERE size_type = ANY($1) LIMIT 1
-    `, [sizeMapping]);
-
-    return fallbackResult.rows[0] || null;
+    return null;
 }
 
 async function updateLockerStatus(lockerId, status) {
-    const result = await pool.query(`
-        UPDATE "Locker" SET status = $2 WHERE id = $1 RETURNING *
-    `, [lockerId, status]);
-    return result.rows[0];
+    const { db } = await connectToDatabase();
+    const isAvailable = status === 'AVAILABLE';
+    
+    await db.collection('locker_stations').updateOne(
+        { "boxes.legacy_locker_id": parseInt(lockerId) },
+        { 
+            $set: { 
+                "boxes.$.is_available": isAvailable,
+                "boxes.$.door_status": status === 'OCCUPIED' ? 'LOCKED' : 'UNLOCKED',
+                "boxes.$.updated_at": new Date()
+            } 
+        }
+    );
+    
+    const station = await db.collection('locker_stations').findOne({ "boxes.legacy_locker_id": parseInt(lockerId) });
+    const box = station?.boxes.find(b => b.legacy_locker_id === parseInt(lockerId));
+    return mapLocker(box);
 }
 
 // =============================================
@@ -361,154 +467,234 @@ function getArduinoByLocker(lockerId) {
 
 // --- Order Functions ---
 async function createOrder(orderData) {
+    const { db } = await connectToDatabase();
     const { orderId, userId, lockerSize, duration, grossAmount, customerName, customerEmail, customerPhone } = orderData;
-    const id = generateUUID();
+    const mongoOrderId = new ObjectId();
+    const mongoUserId = await resolveMongoUserId(userId);
 
-    const result = await pool.query(`
-        INSERT INTO "Order" (
-            id, order_id, user_id, locker_size, duration, gross_amount, payment_status,
-            customer_name, customer_email, customer_phone, created_at, updated_at
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', $7, $8, $9, NOW(), NOW())
-        RETURNING id, order_id, payment_status
-    `, [id, orderId, userId, lockerSize, duration, grossAmount, customerName, customerEmail, customerPhone]);
+    const orderDoc = {
+        _id: mongoOrderId,
+        order_id: orderId,
+        user_id: mongoUserId,
+        locker_size: lockerSize,
+        duration: parseInt(duration || 1),
+        gross_amount: parseFloat(grossAmount || 0),
+        payment_status: 'PENDING',
+        customer_name: customerName || null,
+        customer_email: customerEmail || null,
+        customer_phone: customerPhone || null,
+        created_at: new Date(),
+        updated_at: new Date()
+    };
 
-    return result.rows[0];
+    await db.collection('orders').insertOne(orderDoc);
+    return {
+        id: mongoOrderId.toString(),
+        order_id: orderId,
+        payment_status: 'PENDING'
+    };
 }
 
 async function updateOrderWithUser(orderId, userId) {
-    const result = await pool.query(`
-        UPDATE "Order" SET user_id = $2, updated_at = NOW() WHERE order_id = $1 RETURNING *
-    `, [orderId, userId]);
-    return result.rows[0];
+    const { db } = await connectToDatabase();
+    const mongoUserId = await resolveMongoUserId(userId);
+    await db.collection('orders').updateOne(
+        { order_id: orderId },
+        { $set: { user_id: mongoUserId, updated_at: new Date() } }
+    );
+    const order = await db.collection('orders').findOne({ order_id: orderId });
+    return mapOrder(order);
 }
 
 async function updateOrderStatus(orderId, paymentStatus, transactionId = null, lockerId = null) {
-    let query = `
-        UPDATE "Order"
-        SET payment_status = $2, updated_at = NOW()
-    `;
-    let params = [orderId, paymentStatus];
-    let paramIndex = 3;
-
+    const { db } = await connectToDatabase();
+    const updateFields = {
+        payment_status: paymentStatus,
+        updated_at: new Date()
+    };
     if (transactionId) {
-        query += `, transaction_id = $${paramIndex}`;
-        params.push(transactionId);
-        paramIndex++;
+        updateFields.transaction_id = transactionId;
     }
-
     if (paymentStatus === 'PAID') {
-        query += `, payment_date = NOW()`;
+        updateFields.payment_date = new Date();
     }
-
-    query += ` WHERE order_id = $1 RETURNING *`;
-
-    const result = await pool.query(query, params);
-    return result.rows[0];
+    await db.collection('orders').updateOne(
+        { order_id: orderId },
+        { $set: updateFields }
+    );
+    const order = await db.collection('orders').findOne({ order_id: orderId });
+    return mapOrder(order);
 }
 
 async function getOrderById(orderId) {
-    const result = await pool.query(`SELECT * FROM "Order" WHERE order_id = $1`, [orderId]);
-    return result.rows[0];
+    const { db } = await connectToDatabase();
+    const order = await db.collection('orders').findOne({ order_id: orderId });
+    return mapOrder(order);
 }
 
 async function getAllOrders(limit = 50) {
-    const result = await pool.query(`
-        SELECT * FROM "Order"
-        ORDER BY created_at DESC
-        LIMIT $1
-    `, [limit]);
-    return result.rows;
+    const { db } = await connectToDatabase();
+    const orders = await db.collection('orders')
+        .find()
+        .sort({ created_at: -1 })
+        .limit(limit)
+        .toArray();
+    return orders.map(mapOrder);
 }
 
 // --- UsageTransaction Functions ---
 async function createUsageTransaction(usageData) {
-    const {
-        userId,
-        lockerId,
-        recipientPhone,
-        pickupCode,
-        baseFee,
-        durationPlan,
-        orderId
-    } = usageData;
+    const { db } = await connectToDatabase();
+    const { userId, lockerId, recipientPhone, pickupCode, baseFee, durationPlan, orderId } = usageData;
+    const mongoTxId = new ObjectId();
 
-    const id = generateUUID();
+    const order = orderId ? await getOrderById(orderId) : null;
+    const mongoUserId = await resolveMongoUserId(userId);
+    
+    // Find the box_id for this lockerId
+    const station = await db.collection('locker_stations').findOne({ "boxes.legacy_locker_id": parseInt(lockerId) });
+    const box = station?.boxes.find(b => b.legacy_locker_id === parseInt(lockerId));
 
-    // Get order details
-    const order = await getOrderById(orderId);
-
-    // FIX: Menghilangkan duplikasi started_at dan merapikan urutan kolom sesuai skema Prisma
-    const result = await pool.query(`
-        INSERT INTO "UsageTransaction" (
-            id, category, user_id, recipient_phone, pickup_code,
-            locker_id, duration_plan, base_fee, status,
-            started_at, ended_at
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'ACTIVE', NOW(), NULL)
-        RETURNING *
-    `, [
-        id,
-        userId ? 'USER_DEPOSIT' : 'COURIER_DROP',
-        userId,
-        recipientPhone || order?.customer_phone,
-        pickupCode,
-        lockerId,
-        durationPlan || order?.duration,
-        baseFee || order?.gross_amount
-    ]);
-
-    console.log('✓ UsageTransaction created:', result.rows[0].id);
-    logger.info({
-        timestamp: new Date().toISOString(),
-        level: 'INFO',
-        service: 'sewalokerbox-api',
-        message: 'UsageTransaction created',
-        context: {
-            usageId: result.rows[0].id,
-            userId,
-            lockerId,
-            orderId
+    const txnDoc = {
+        _id: mongoTxId,
+        category: userId ? 'USER_DEPOSIT' : 'COURIER_DROP',
+        box_reference: {
+            station_id: station ? station._id : null,
+            box_id: box ? box.box_id : null,
+            legacy_locker_id: parseInt(lockerId)
         },
-        tags: ['usage-transaction', 'create'],
-        severity: 'P3'
-    });
+        parties: {
+            owner_id: mongoUserId,
+            sender_phone: usageData.senderPhone || null,
+            courier_name: usageData.courierName || null,
+            resi_number: usageData.resiNumber || null,
+            recipient_phone: recipientPhone || order?.customer_phone
+        },
+        pickup_code: pickupCode,
+        status: 'ACTIVE',
+        fees: {
+            base_fee: parseFloat(baseFee || order?.gross_amount || 0),
+            extension_fee: 0,
+            total_fee: parseFloat(baseFee || order?.gross_amount || 0)
+        },
+        duration_plan: parseInt(durationPlan || order?.duration || 1),
+        timestamps: {
+            created_at: new Date(),
+            started_at: new Date(),
+            ended_at: null
+        },
+        payments: order ? [{
+            payment_id: new ObjectId(),
+            payment_method: 'QRIS',
+            payment_status: order.payment_status,
+            amount: parseFloat(order.gross_amount),
+            gateway_ref: order.transaction_id || null,
+            paid_at: new Date()
+        }] : [],
+        activity_logs: [{
+            log_id: new ObjectId(),
+            actor_id: mongoUserId,
+            event_name: 'TRANSACTION_CREATED',
+            description: `Usage transaction created for locker ${lockerId}`,
+            logged_at: new Date()
+        }]
+    };
 
-    return result.rows[0];
+    await db.collection('transactions').insertOne(txnDoc);
+    console.log('✓ UsageTransaction created in MongoDB:', txnDoc._id);
+    
+    return {
+        id: mongoTxId.toString(),
+        category: txnDoc.category,
+        user_id: mongoUserId ? mongoUserId.toString() : null,
+        recipient_phone: txnDoc.parties.recipient_phone,
+        pickup_code: pickupCode,
+        locker_id: parseInt(lockerId),
+        started_at: txnDoc.timestamps.started_at,
+        duration_plan: txnDoc.duration_plan,
+        base_fee: txnDoc.fees.base_fee,
+        extension_fee: 0,
+        status: 'ACTIVE'
+    };
 }
 
 async function getUsageTransactionByPickupCode(pickupCode) {
-    const result = await pool.query(`
-        SELECT ut.*, l.size_type, l.status as locker_status
-        FROM "UsageTransaction" ut
-        JOIN "Locker" l ON ut.locker_id = l.id
-        WHERE ut.pickup_code = $1
-    `, [pickupCode]);
-    return result.rows[0];
+    const { db } = await connectToDatabase();
+    const txn = await db.collection('transactions').findOne({ pickup_code: pickupCode });
+    if (!txn) return null;
+
+    // Join with locker details
+    const legacyLockerId = txn.box_reference.legacy_locker_id;
+    const station = await db.collection('locker_stations').findOne({ "boxes.legacy_locker_id": legacyLockerId });
+    const box = station?.boxes.find(b => b.legacy_locker_id === legacyLockerId);
+
+    return {
+        id: txn._id.toString(),
+        category: txn.category,
+        user_id: txn.parties.owner_id ? txn.parties.owner_id.toString() : null,
+        sender_phone: txn.parties.sender_phone || null,
+        courier_name: txn.parties.courier_name || null,
+        resi_number: txn.parties.resi_number || null,
+        recipient_phone: txn.parties.recipient_phone,
+        pickup_code: txn.pickup_code,
+        locker_id: legacyLockerId,
+        started_at: txn.timestamps.started_at,
+        duration_plan: txn.duration_plan || null,
+        ended_at: txn.timestamps.ended_at || null,
+        base_fee: txn.fees.base_fee,
+        extension_fee: txn.fees.extension_fee || 0,
+        status: txn.status,
+        size_type: box ? box.size_type : null,
+        locker_status: box ? (box.is_available ? 'AVAILABLE' : 'OCCUPIED') : null
+    };
 }
 
 async function completeUsageTransaction(pickupCode) {
-    const result = await pool.query(`
-        UPDATE "UsageTransaction"
-        SET ended_at = NOW(), status = 'COMPLETED'
-        WHERE pickup_code = $1
-        RETURNING *
-    `, [pickupCode]);
-    return result.rows[0];
+    const { db } = await connectToDatabase();
+    await db.collection('transactions').updateOne(
+        { pickup_code: pickupCode },
+        { 
+            $set: { 
+                status: 'COMPLETED',
+                "timestamps.ended_at": new Date() 
+            },
+            $push: {
+                activity_logs: {
+                    log_id: new ObjectId(),
+                    event_name: 'BOX_PICKED_UP',
+                    description: 'Barang diambil, sewa selesai.',
+                    logged_at: new Date()
+                }
+            }
+        }
+    );
+    const txn = await db.collection('transactions').findOne({ pickup_code: pickupCode });
+    return mapTransaction(txn);
 }
 
 // --- TopUpTransaction Functions ---
 async function createTopUpTransaction(topUpData) {
+    const { db } = await connectToDatabase();
     const { userId, amount, paymentStatus = 'PENDING' } = topUpData;
-    const id = generateUUID();
+    const mongoTxId = new ObjectId();
+    const mongoUserId = await resolveMongoUserId(userId);
 
-    const result = await pool.query(`
-        INSERT INTO "TopUpTransaction" (id, user_id, amount, payment_status, "createdAt")
-        VALUES ($1, $2, $3, $4, NOW())
-        RETURNING *
-    `, [id, userId, amount, paymentStatus]);
+    const doc = {
+        _id: mongoTxId,
+        user_id: mongoUserId,
+        amount: parseFloat(amount),
+        payment_status: paymentStatus,
+        created_at: new Date()
+    };
 
-    return result.rows[0];
+    await db.collection('topup_transactions').insertOne(doc);
+    return {
+        id: mongoTxId.toString(),
+        user_id: mongoUserId ? mongoUserId.toString() : null,
+        amount: parseFloat(amount),
+        payment_status: paymentStatus,
+        createdAt: doc.created_at
+    };
 }
 
 // =============================================
@@ -575,14 +761,29 @@ app.post('/api/auth/register', async (req, res) => {
         const hashedPassword = await hashPassword(password);
 
         // Create user
-        const id = generateUUID();
-        const result = await pool.query(`
-            INSERT INTO "User" (id, full_name, email, phone_number, password, balance, "createdAt")
-            VALUES ($1, $2, $3, $4, $5, 0, NOW())
-            RETURNING id, full_name, email, phone_number, "createdAt"
-        `, [id, fullName, email, phoneNumber, hashedPassword]);
+        const { db } = await connectToDatabase();
+        const mongoUserId = new ObjectId();
+        const newUser = {
+            _id: mongoUserId,
+            full_name: fullName,
+            email: email,
+            phone_number: phoneNumber,
+            security: {
+                password: hashedPassword
+            },
+            wallet_balance: 0,
+            created_at: new Date(),
+            updated_at: new Date()
+        };
+        await db.collection('users').insertOne(newUser);
 
-        const user = result.rows[0];
+        const user = {
+            id: mongoUserId.toString(),
+            full_name: fullName,
+            email: email,
+            phone_number: phoneNumber,
+            createdAt: newUser.created_at
+        };
         const token = generateToken(user);
 
         console.log('✓ New user registered:', user.id);
@@ -732,19 +933,17 @@ app.post('/api/auth/login', async (req, res) => {
 // Get current user profile
 app.get('/api/auth/me', authenticateToken, async (req, res) => {
     try {
-        const result = await pool.query(`
-            SELECT id, full_name, email, phone_number, balance, nfc_uid, "createdAt"
-            FROM "User" WHERE id = $1
-        `, [req.user.id]);
+        const { db } = await connectToDatabase();
+        const userDoc = await db.collection('users').findOne({ _id: new ObjectId(req.user.id) });
 
-        if (result.rows.length === 0) {
+        if (!userDoc) {
             return res.status(404).json({
                 success: false,
                 error: 'User tidak ditemukan'
             });
         }
 
-        const user = result.rows[0];
+        const user = mapUser(userDoc);
 
         res.json({
             success: true,
@@ -788,21 +987,27 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
 app.put('/api/auth/profile', authenticateToken, async (req, res) => {
     try {
         const { fullName, phoneNumber } = req.body;
+        const { db } = await connectToDatabase();
 
-        const result = await pool.query(`
-            UPDATE "User" SET full_name = COALESCE($2, full_name), phone_number = COALESCE($3, phone_number)
-            WHERE id = $1
-            RETURNING id, full_name, email, phone_number
-        `, [req.user.id, fullName, phoneNumber]);
+        const updateFields = {};
+        if (fullName !== undefined) updateFields.full_name = fullName;
+        if (phoneNumber !== undefined) updateFields.phone_number = phoneNumber;
+        updateFields.updated_at = new Date();
 
-        if (result.rows.length === 0) {
+        await db.collection('users').updateOne(
+            { _id: new ObjectId(req.user.id) },
+            { $set: updateFields }
+        );
+
+        const userDoc = await db.collection('users').findOne({ _id: new ObjectId(req.user.id) });
+        if (!userDoc) {
             return res.status(404).json({
                 success: false,
                 error: 'User tidak ditemukan'
             });
         }
 
-        const user = result.rows[0];
+        const user = mapUser(userDoc);
 
         res.json({
             success: true,
@@ -853,12 +1058,10 @@ app.put('/api/auth/password', authenticateToken, async (req, res) => {
             });
         }
 
-        // Get current user with password
-        const result = await pool.query(`
-            SELECT password FROM "User" WHERE id = $1
-        `, [req.user.id]);
+        const { db } = await connectToDatabase();
+        const userDoc = await db.collection('users').findOne({ _id: new ObjectId(req.user.id) });
 
-        if (result.rows.length === 0 || !result.rows[0].password) {
+        if (!userDoc || !userDoc.security?.password) {
             return res.status(400).json({
                 success: false,
                 error: 'Akun belum memiliki password'
@@ -866,7 +1069,7 @@ app.put('/api/auth/password', authenticateToken, async (req, res) => {
         }
 
         // Verify current password
-        const isValid = await comparePassword(currentPassword, result.rows[0].password);
+        const isValid = await comparePassword(currentPassword, userDoc.security.password);
         if (!isValid) {
             return res.status(401).json({
                 success: false,
@@ -876,9 +1079,10 @@ app.put('/api/auth/password', authenticateToken, async (req, res) => {
 
         // Update password
         const hashedPassword = await hashPassword(newPassword);
-        await pool.query(`
-            UPDATE "User" SET password = $2 WHERE id = $1
-        `, [req.user.id, hashedPassword]);
+        await db.collection('users').updateOne(
+            { _id: new ObjectId(req.user.id) },
+            { $set: { "security.password": hashedPassword, updated_at: new Date() } }
+        );
 
         res.json({
             success: true,
@@ -971,6 +1175,7 @@ app.post('/api/create-order', async (req, res) => {
         });
 
         let user;
+        const { db } = await connectToDatabase();
 
         // 1. If authenticated user (via token), use that user
         const authHeader = req.headers['authorization'];
@@ -978,9 +1183,9 @@ app.post('/api/create-order', async (req, res) => {
             const token = authHeader.split(' ')[1];
             const decoded = verifyToken(token);
             if (decoded) {
-                const userResult = await pool.query(`SELECT * FROM "User" WHERE id = $1`, [decoded.id]);
-                if (userResult.rows.length > 0) {
-                    user = userResult.rows[0];
+                const userDoc = await db.collection('users').findOne({ _id: new ObjectId(decoded.id) });
+                if (userDoc) {
+                    user = mapUser(userDoc);
                     console.log('✓ Authenticated user:', user.id);
                 }
             }
@@ -988,9 +1193,9 @@ app.post('/api/create-order', async (req, res) => {
 
         // 2. If no authenticated user but userId provided, find by ID
         if (!user && userId) {
-            const userResult = await pool.query(`SELECT * FROM "User" WHERE id = $1`, [userId]);
-            if (userResult.rows.length > 0) {
-                user = userResult.rows[0];
+            const userDoc = await db.collection('users').findOne({ _id: new ObjectId(userId) });
+            if (userDoc) {
+                user = mapUser(userDoc);
                 console.log('✓ User found by ID:', user.id);
             }
         }
@@ -1074,7 +1279,7 @@ app.post('/api/create-order', async (req, res) => {
             });
         } else {
             // Hapus order jika gagal membuat token
-            await pool.query(`DELETE FROM "Order" WHERE id = $1`, [order.id]);
+            await db.collection('orders').deleteOne({ _id: new ObjectId(order.id) });
             res.status(500).json({
                 success: false,
                 error: result.error
@@ -1292,19 +1497,27 @@ app.post('/api/tap', async (req, res) => {
     console.log('NFC Tap received for UID:', nfc_uid);
 
     try {
-        // Find user by NFC UID
-        const userResult = await pool.query(`
-            SELECT u.*, ut.pickup_code, ut.locker_id, ut.status as usage_status, ut.id as usage_id
-            FROM "User" u
-            LEFT JOIN "UsageTransaction" ut ON u.id = ut.user_id AND ut.status = 'ACTIVE'
-            WHERE u.nfc_uid = $1
-            ORDER BY ut."started_at" DESC
-            LIMIT 1
-        `, [nfc_uid]);
+        const { db } = await connectToDatabase();
+        const userDoc = await db.collection('users').findOne({ nfc_uid: nfc_uid });
+        
+        let usage = null;
+        if (userDoc) {
+            const activeTxn = await db.collection('transactions').findOne(
+                { "parties.owner_id": userDoc._id, status: 'ACTIVE' },
+                { sort: { "timestamps.started_at": -1 } }
+            );
+            if (activeTxn) {
+                usage = {
+                    ...mapUser(userDoc),
+                    pickup_code: activeTxn.pickup_code,
+                    locker_id: activeTxn.box_reference.legacy_locker_id,
+                    usage_status: activeTxn.status,
+                    usage_id: activeTxn._id.toString()
+                };
+            }
+        }
 
-        if (userResult.rows.length > 0 && userResult.rows[0].pickup_code) {
-            const usage = userResult.rows[0];
-
+        if (usage && usage.pickup_code) {
             // Complete the usage transaction
             await completeUsageTransaction(usage.pickup_code);
 
@@ -1341,7 +1554,7 @@ app.post('/api/tap', async (req, res) => {
                 status: "UNLOCK_SUCCESS",
                 message: "Locker berhasil dibuka",
                 pickup_code: usage.pickup_code,
-                user_name: userResult.rows[0].full_name,
+                user_name: userDoc.full_name,
                 arduino: arduinoResult
             });
         } else {
@@ -1381,23 +1594,31 @@ app.post('/api/tap', async (req, res) => {
 app.get('/api/pickup/:orderId', async (req, res) => {
     try {
         const { orderId } = req.params;
+        const { db } = await connectToDatabase();
 
-        const result = await pool.query(`
-            SELECT ut.*, l.size_type
-            FROM "UsageTransaction" ut
-            JOIN "Locker" l ON ut.locker_id = l.id
-            JOIN "Order" o ON o.user_id = ut.user_id
-            WHERE o.order_id = $1
-            ORDER BY ut."started_at" DESC
-            LIMIT 1
-        `, [orderId]);
+        const order = await db.collection('orders').findOne({ order_id: orderId });
+        if (!order) {
+            return res.status(404).json({
+                success: false,
+                error: 'No order found with this orderId'
+            });
+        }
 
-        if (result.rows.length > 0) {
+        const txn = await db.collection('transactions').findOne(
+            { "parties.owner_id": order.user_id ? new ObjectId(order.user_id) : null },
+            { sort: { "timestamps.started_at": -1 } }
+        );
+
+        if (txn) {
+            const legacyLockerId = txn.box_reference.legacy_locker_id;
+            const station = await db.collection('locker_stations').findOne({ "boxes.legacy_locker_id": legacyLockerId });
+            const box = station?.boxes.find(b => b.legacy_locker_id === legacyLockerId);
+
             res.json({
                 success: true,
-                pickup_code: result.rows[0].pickup_code,
-                locker_id: result.rows[0].locker_id,
-                size_type: result.rows[0].size_type
+                pickup_code: txn.pickup_code,
+                locker_id: legacyLockerId,
+                size_type: box ? box.size_type : null
             });
         } else {
             res.status(404).json({
@@ -1417,15 +1638,14 @@ app.get('/api/pickup/:orderId', async (req, res) => {
 app.get('/api/user/nfc/:nfcUid', async (req, res) => {
     try {
         const { nfcUid } = req.params;
+        const { db } = await connectToDatabase();
 
-        const result = await pool.query(`
-            SELECT * FROM "User" WHERE nfc_uid = $1
-        `, [nfcUid]);
+        const userDoc = await db.collection('users').findOne({ nfc_uid: nfcUid });
 
-        if (result.rows.length > 0) {
+        if (userDoc) {
             res.json({
                 success: true,
-                user: result.rows[0]
+                user: mapUser(userDoc)
             });
         } else {
             res.status(404).json({
@@ -1445,6 +1665,7 @@ app.get('/api/user/nfc/:nfcUid', async (req, res) => {
 app.post('/api/register-nfc', async (req, res) => {
     try {
         const { userId, nfcUid } = req.body;
+        const { db } = await connectToDatabase();
 
         if (!userId || !nfcUid) {
             return res.status(400).json({
@@ -1453,15 +1674,18 @@ app.post('/api/register-nfc', async (req, res) => {
             });
         }
 
-        const result = await pool.query(`
-            UPDATE "User" SET nfc_uid = $2 WHERE id = $1 RETURNING *
-        `, [userId, nfcUid]);
+        await db.collection('users').updateOne(
+            { _id: new ObjectId(userId) },
+            { $set: { nfc_uid: nfcUid, updated_at: new Date() } }
+        );
 
-        if (result.rows.length > 0) {
+        const userDoc = await db.collection('users').findOne({ _id: new ObjectId(userId) });
+
+        if (userDoc) {
             res.json({
                 success: true,
                 message: 'NFC UID registered successfully',
-                user: result.rows[0]
+                user: mapUser(userDoc)
             });
         } else {
             res.status(404).json({
@@ -1480,14 +1704,15 @@ app.post('/api/register-nfc', async (req, res) => {
 // 7. Get All Lockers
 app.get('/api/lockers', async (req, res) => {
     try {
-        const result = await pool.query(`
-            SELECT * FROM "Locker" ORDER BY id
-        `);
+        const { db } = await connectToDatabase();
+        const station = await db.collection('locker_stations').findOne({ location_name: "Stasiun Pusat SewaLokerBox" });
+        const boxes = station ? station.boxes : [];
+        const lockers = boxes.map(mapLocker).sort((a, b) => a.id - b.id);
 
         res.json({
             success: true,
-            count: result.rows.length,
-            lockers: result.rows
+            count: lockers.length,
+            lockers: lockers
         });
     } catch (error) {
         res.status(500).json({
@@ -1801,22 +2026,24 @@ app.get('/api/locker/:lockerId/status', async (req, res) => {
     try {
         const { lockerId } = req.params;
         const id = parseInt(lockerId);
+        const { db } = await connectToDatabase();
 
-        const result = await pool.query(`SELECT * FROM "Locker" WHERE id = $1`, [id]);
+        const station = await db.collection('locker_stations').findOne({ "boxes.legacy_locker_id": id });
+        const box = station?.boxes.find(b => b.legacy_locker_id === id);
 
-        if (result.rows.length === 0) {
+        if (!box) {
             return res.status(404).json({
                 success: false,
                 error: 'Locker not found'
             });
         }
 
-        // Check if Arduino is connected
+        const locker = mapLocker(box);
         const device = getArduinoByLocker(id);
 
         res.json({
             success: true,
-            locker: result.rows[0],
+            locker: locker,
             arduino: device ? {
                 connected: true,
                 ip: device.ip,
@@ -1878,16 +2105,18 @@ app.get('/api/arduino/devices', (req, res) => {
 // 8. Get All Users
 app.get('/api/users', async (req, res) => {
     try {
-        const result = await pool.query(`
-            SELECT id, full_name, email, phone_number, balance, nfc_uid, "createdAt"
-            FROM "User"
-            ORDER BY "createdAt" DESC
-        `);
+        const { db } = await connectToDatabase();
+        const usersDocs = await db.collection('users')
+            .find()
+            .sort({ created_at: -1 })
+            .toArray();
+
+        const users = usersDocs.map(mapUser);
 
         res.json({
             success: true,
-            count: result.rows.length,
-            users: result.rows
+            count: users.length,
+            users: users
         });
     } catch (error) {
         res.status(500).json({
@@ -1900,20 +2129,60 @@ app.get('/api/users', async (req, res) => {
 // 9. Get All Usage Transactions
 app.get('/api/usages', async (req, res) => {
     try {
-        const result = await pool.query(`
-            SELECT ut.*, l.size_type, l.status as locker_status,
-                   u.full_name as user_name, u.phone_number as user_phone
-            FROM "UsageTransaction" ut
-            JOIN "Locker" l ON ut.locker_id = l.id
-            LEFT JOIN "User" u ON ut.user_id = u.id
-            ORDER BY ut."started_at" DESC
-            LIMIT 100
-        `);
+        const { db } = await connectToDatabase();
+        const usagesDocs = await db.collection('transactions').aggregate([
+            { $sort: { "timestamps.started_at": -1 } },
+            { $limit: 100 },
+            {
+                $lookup: {
+                    from: "users",
+                    localField: "parties.owner_id",
+                    foreignField: "_id",
+                    as: "user_info"
+                }
+            },
+            {
+                $lookup: {
+                    from: "locker_stations",
+                    localField: "box_reference.station_id",
+                    foreignField: "_id",
+                    as: "station_info"
+                }
+            }
+        ]).toArray();
+
+        const usages = usagesDocs.map(txn => {
+            const user = txn.user_info[0] || null;
+            const station = txn.station_info[0] || null;
+            const box = station?.boxes.find(b => b.box_id.toString() === txn.box_reference.box_id?.toString()) || null;
+
+            return {
+                id: txn._id.toString(),
+                category: txn.category,
+                user_id: txn.parties.owner_id ? txn.parties.owner_id.toString() : null,
+                sender_phone: txn.parties.sender_phone || null,
+                courier_name: txn.parties.courier_name || null,
+                resi_number: txn.parties.resi_number || null,
+                recipient_phone: txn.parties.recipient_phone,
+                pickup_code: txn.pickup_code,
+                locker_id: txn.box_reference.legacy_locker_id || null,
+                started_at: txn.timestamps.started_at,
+                duration_plan: txn.duration_plan || null,
+                ended_at: txn.timestamps.ended_at || null,
+                base_fee: txn.fees.base_fee,
+                extension_fee: txn.fees.extension_fee || 0,
+                status: txn.status,
+                size_type: box ? box.size_type : null,
+                locker_status: box ? (box.is_available ? 'AVAILABLE' : 'OCCUPIED') : null,
+                user_name: user ? user.full_name : null,
+                user_phone: user ? user.phone_number : null
+            };
+        });
 
         res.json({
             success: true,
-            count: result.rows.length,
-            usages: result.rows
+            count: usages.length,
+            usages: usages
         });
     } catch (error) {
         res.status(500).json({
@@ -1926,31 +2195,40 @@ app.get('/api/usages', async (req, res) => {
 // 10. Dashboard Summary
 app.get('/api/dashboard', async (req, res) => {
     try {
-        const [orders, users, usages, lockers] = await Promise.all([
-            pool.query(`SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE payment_status = 'PAID') as paid FROM "Order"`),
-            pool.query(`SELECT COUNT(*) as total FROM "User"`),
-            pool.query(`SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE status = 'ACTIVE') as active FROM "UsageTransaction"`),
-            pool.query(`SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE status = 'AVAILABLE') as available, COUNT(*) FILTER (WHERE status = 'OCCUPIED') as occupied FROM "Locker"`)
+        const { db } = await connectToDatabase();
+
+        const [ordersTotal, ordersPaid, usersTotal, usagesTotal, usagesActive, station] = await Promise.all([
+            db.collection('orders').countDocuments(),
+            db.collection('orders').countDocuments({ payment_status: 'PAID' }),
+            db.collection('users').countDocuments(),
+            db.collection('transactions').countDocuments(),
+            db.collection('transactions').countDocuments({ status: 'ACTIVE' }),
+            db.collection('locker_stations').findOne({ location_name: "Stasiun Pusat SewaLokerBox" })
         ]);
+
+        const boxes = station ? station.boxes : [];
+        const lockersTotal = boxes.length;
+        const lockersAvailable = boxes.filter(b => b.is_available).length;
+        const lockersOccupied = boxes.filter(b => !b.is_available).length;
 
         res.json({
             success: true,
             dashboard: {
                 orders: {
-                    total: parseInt(orders.rows[0].total),
-                    paid: parseInt(orders.rows[0].paid)
+                    total: ordersTotal,
+                    paid: ordersPaid
                 },
                 users: {
-                    total: parseInt(users.rows[0].total)
+                    total: usersTotal
                 },
                 usages: {
-                    total: parseInt(usages.rows[0].total),
-                    active: parseInt(usages.rows[0].active)
+                    total: usagesTotal,
+                    active: usagesActive
                 },
                 lockers: {
-                    total: parseInt(lockers.rows[0].total),
-                    available: parseInt(lockers.rows[0].available),
-                    occupied: parseInt(lockers.rows[0].occupied)
+                    total: lockersTotal,
+                    available: lockersAvailable,
+                    occupied: lockersOccupied
                 }
             }
         });
@@ -1984,7 +2262,8 @@ app.get('/api/orders', async (req, res) => {
 app.get('/api/health', async (req, res) => {
     let dbStatus = 'DISCONNECTED';
     try {
-        await pool.query('SELECT 1');
+        const { db } = await connectToDatabase();
+        await db.command({ ping: 1 });
         dbStatus = 'CONNECTED';
     } catch (e) {
         dbStatus = 'ERROR: ' + e.message;
@@ -1992,7 +2271,7 @@ app.get('/api/health', async (req, res) => {
 
     res.json({
         success: true,
-        message: 'Smart Locker API Running',
+        message: 'Smart Locker API Running (MongoDB)',
         timestamp: new Date().toISOString(),
         midtrans: {
             mode: MIDTRANS_IS_PRODUCTION ? 'PRODUCTION' : 'SANDBOX',
@@ -2043,14 +2322,10 @@ app.use(errorHandler);
 // =============================================
 async function runMigrations() {
     try {
-        // Add password column if not exists
-        await pool.query(`
-            ALTER TABLE "User" ADD COLUMN IF NOT EXISTS password TEXT
-        `);
-        console.log('✓ Database migration: password column ready');
+        const { db } = await connectToDatabase();
+        console.log('✓ Database validation: MongoDB collections ready');
     } catch (err) {
-        // Ignore if column already exists or other errors
-        console.log('⚠ Database migration:', err.message);
+        console.log('⚠ Database validation error:', err.message);
     }
 }
 
@@ -2086,7 +2361,6 @@ process.on('SIGINT', () => {
         tags: ['server', 'shutdown'],
         severity: 'P3'
     });
-    pool.end();
     process.exit(0);
 });
 
