@@ -67,24 +67,28 @@ const logger = createLogger({
   ]
 });
 
+const isVercel = !!process.env.VERCEL;
+
 // Add file transport in production
-if (isProduction) {
+if (isProduction && !isVercel) {
   logger.add(
     new DailyRotateFile(fileRotateOptions)
   );
 }
 
 // Add error transport for fatal and error logs (level <= error)
-logger.add(
-  new DailyRotateFile({
-    filename: 'logs/errors-%DATE%.log',
-    datePattern: 'YYYY-MM-DD',
-    level: 'error',
-    format: logFormat,
-    zippedArchive: true,
-    maxSize: '5m',
-    maxFiles: '5d'
-  })
-);
+if (!isVercel) {
+  logger.add(
+    new DailyRotateFile({
+      filename: 'logs/errors-%DATE%.log',
+      datePattern: 'YYYY-MM-DD',
+      level: 'error',
+      format: logFormat,
+      zippedArchive: true,
+      maxSize: '5m',
+      maxFiles: '5d'
+    })
+  );
+}
 
 module.exports = logger;
